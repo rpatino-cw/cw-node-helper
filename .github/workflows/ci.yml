@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, cw-node-helper]
+    branches: [main, rpatino/cw-node-helper]
   pull_request:
 
 jobs:
