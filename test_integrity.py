@@ -710,8 +710,9 @@ class TestConfigIntegrity(unittest.TestCase):
     def test_search_projects(self):
         self.assertIn("DO", gnc.SEARCH_PROJECTS)
         self.assertIn("HO", gnc.SEARCH_PROJECTS)
-        # SDA/SDE/SDO/SDP/SDS must NOT be in search projects
-        for bad in ("SDA", "SDE", "SDO", "SDP", "SDS"):
+        self.assertIn("SDA", gnc.SEARCH_PROJECTS)
+        # SDE/SDO/SDP/SDS must NOT be in search projects
+        for bad in ("SDE", "SDO", "SDP", "SDS"):
             self.assertNotIn(bad, gnc.SEARCH_PROJECTS, f"{bad} should not be a search project")
 
     def test_jira_key_pattern(self):
