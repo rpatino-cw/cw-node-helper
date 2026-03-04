@@ -1381,6 +1381,8 @@ def _parse_rack_location(rack_loc: str) -> dict | None:
     """
     if not rack_loc:
         return None
+    # Strip parenthetical annotations like "(US-EVI01:dh1:244)" from rack locations
+    rack_loc = re.sub(r'\s*\([^)]*\)', '', rack_loc)
     parts = rack_loc.split(".")
     if len(parts) < 3:
         return None
