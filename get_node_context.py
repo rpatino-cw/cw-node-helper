@@ -2308,29 +2308,22 @@ def _ai_find_ticket(user_description: str, email: str, token: str) -> str | None
         print(f"  {DIM}Try different details or use option 3 (Browse queue).{RESET}")
         return None
 
-    # Step 3: Format results and ask AI to rank
-    result_lines = []
-    for i, issue in enumerate(results[:10], 1):
+    # Step 3: Show all results as a numbered list
+    print(f"\n  {BOLD}Found {len(results)} results:{RESET}\n")
+    for i, issue in enumerate(results[:20], 1):
         key = issue.get("key", "?")
         summary = issue.get("fields", {}).get("summary", "?")
-        status = issue.get("fields", {}).get("status", {}).get("name", "?")
-        result_lines.append(f"  {i}. {key} [{status}] — {summary}")
-
-    result_text = "\n".join(result_lines)
-    print(f"\n  {DIM}Found {len(results)} results. Ranking...{RESET}\n")
-
-    rank_messages = [
-        {"role": "system", "content": AI_SYSTEM_PROMPT_FINDER},
-        {"role": "user", "content": (
-            f"The user described: \"{user_description}\"\n\n"
-            f"Here are the search results:\n{result_text}\n\n"
-            f"Rank the top 3 most likely matches and briefly explain why."
-        )},
-    ]
-    _ai_chat(rank_messages, temperature=0.3)
+        status_obj = issue.get("fields", {}).get("status", {})
+        status = status_obj.get("name", "?") if isinstance(status_obj, dict) else str(status_obj)
+        assignee_obj = issue.get("fields", {}).get("assignee")
+        assignee = ""
+        if isinstance(assignee_obj, dict) and assignee_obj:
+            assignee = f"  {DIM}{assignee_obj.get('displayName', '')}{RESET}"
+        sc, sd = _status_color(status)
+        print(f"  {BOLD}{i:>2}.{RESET}  {key}  {sc}{sd} {status:<16}{RESET} {DIM}{summary[:50]}{RESET}{assignee}")
 
     # Step 4: Let user pick
-    print(f"\n\n  {DIM}Select a ticket [1-{min(len(results), 10)}], enter a key, or ENTER to cancel:{RESET}")
+    print(f"\n  {DIM}Select [1-{min(len(results), 20)}], enter a key, or ENTER to cancel:{RESET}")
     try:
         pick = input("  > ").strip()
     except (EOFError, KeyboardInterrupt):
