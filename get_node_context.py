@@ -2297,6 +2297,129 @@ def _ai_summarize(ctx: dict) -> str:
     return _ai_chat(messages, temperature=0.3)
 
 
+def _suggest_comments(ctx: dict, action: str = "verify") -> list:
+    """Generate 2-3 context-aware comment suggestions. No AI — template-based."""
+    summary = (ctx.get("summary") or "").lower()
+    tag = ctx.get("service_tag") or "?"
+    hostname = ctx.get("hostname") or "?"
+    rack = ctx.get("rack_location") or "?"
+
+    ticket_type = ""
+    for t in ["POWER_CYCLE", "RESEAT", "DEVICE", "RECABLE", "NETWORK",
+              "DPU_PORT_CLEAN", "INSPECTION", "SWAP", "UNCABLE", "RMA"]:
+        if t.lower().replace("_", " ") in summary.replace("_", " "):
+            ticket_type = t
+            break
+
+    if action == "verify":
+        templates = {
+            "POWER_CYCLE": [
+                f"Power cycled {hostname} ({tag}). BMC responding, node booting.",
+                f"Pulled power on {tag}, reseated after 30s. Node back up.",
+            ],
+            "RECABLE": [
+                f"Recabled {hostname} ({tag}) per onboarding layout. Ready for onboarding.",
+                f"Recable complete. All cables verified and labeled.",
+            ],
+            "RESEAT": [
+                f"Reseated component on {hostname} ({tag}). Powered on, verified in BMC.",
+                f"Component reseat complete on {tag}. Node booted, device detected.",
+            ],
+            "DPU_PORT_CLEAN": [
+                f"Cleaned DPU ports on {hostname} ({tag}). Optics reseated, links up.",
+                f"DPU port cleaning complete. Verified link status.",
+            ],
+            "SWAP": [
+                f"Swapped component on {hostname} ({tag}). Old SN: ___, new SN: ___.",
+                f"Swap done. Powered on, device detected in BMC.",
+            ],
+            "UNCABLE": [
+                f"Uncabled {hostname} ({tag}). All cables removed and labeled.",
+                f"Uncable complete on {tag}. Power and data disconnected.",
+            ],
+            "NETWORK": [
+                f"Network issue resolved on {hostname} ({tag}). Links verified.",
+                f"Reseated cables/optics on {tag}. Connectivity restored.",
+            ],
+        }
+        return templates.get(ticket_type, [
+            f"Work complete on {hostname} ({tag}). Ready for verification.",
+            f"Task done on {tag}. Node operational.",
+        ])
+    elif action == "hold":
+        return [
+            f"Waiting on parts for {hostname} ({tag}).",
+            f"Need guidance from Fleet/FROps on {tag}.",
+            f"Blocked — node not accessible at {rack}.",
+        ]
+    elif action == "close":
+        return [
+            f"Verified and closing. {hostname} ({tag}) is operational.",
+            f"Work confirmed complete. Closing.",
+        ]
+    elif action == "start":
+        return [
+            f"Starting work on {hostname} ({tag}).",
+            f"On-site at {rack}. Beginning {ticket_type or 'work'}.",
+        ]
+    return [f"Update on {ctx.get('issue_key', '?')}: "]
+
+
+def _pick_or_type_comment(ctx: dict, action: str = "verify") -> str:
+    """Show category-based suggestions, AI option, or type custom."""
+    suggestions = _suggest_comments(ctx, action)
+
+    print(f"\n  {DIM}Suggested comments:{RESET}")
+    for i, s in enumerate(suggestions, 1):
+        print(f"    {BOLD}{i}{RESET}  {s}")
+    if _ai_available():
+        print(f"    {CYAN}{BOLD}ai{RESET}  {DIM}Ask AI to write a humanized comment{RESET}")
+    print(f"    {DIM}Or type your own  |  ENTER to skip{RESET}\n")
+
+    try:
+        pick = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+    if not pick:
+        return ""
+    if pick.isdigit() and 1 <= int(pick) <= len(suggestions):
+        comment = suggestions[int(pick) - 1]
+        print(f"  {GREEN}{comment}{RESET}")
+        return comment
+    if pick.lower() == "ai" and _ai_available():
+        context_text = _build_ai_context(ctx)
+        messages = [
+            {"role": "system", "content": (
+                "Write a short, professional Jira comment for a DCT technician. "
+                "One to two sentences max. Sound like a real person, not a robot. "
+                "Be specific about what was done using the ticket context. "
+                "NEVER use markdown. Plain text only."
+            )},
+            {"role": "user", "content": (
+                f"Write a comment for action: {action}\n"
+                f"Ticket context:\n{context_text[:3000]}"
+            )},
+        ]
+        result = _ai_chat(messages, stream=False, max_tokens=150)
+        if result:
+            result = result.strip().strip('"').strip("'")
+            print(f"\n  {GREEN}{result}{RESET}")
+            print(f"  {DIM}Use this? [Y/n]:{RESET} ", end="")
+            try:
+                confirm = input().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                confirm = "n"
+            if confirm != "n":
+                return result
+            try:
+                return input("  Type your own: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return ""
+        return ""
+    return pick
+
+
 def _ai_find_ticket(user_description: str, email: str, token: str) -> str | None:
     """Help user find a ticket they can't remember.
 
@@ -3007,6 +3130,7 @@ def _run_history_interactive(email: str, token: str, identifier: str,
 
         key = chosen["key"]
         print(f"\n  Fetching {key}...\n")
+        _issue_cache.pop(key, None)  # always fetch fresh from history view
         issue = _jira_get_issue(key, email, token)
         ctx = _build_context(key, issue, email, token)
 
@@ -6513,11 +6637,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
         if choice == "v" and ctx and email and token:
             # [v] Move to Verification: In Progress → Verification
             key = ctx.get("issue_key", "?")
-            print(f"\n  {DIM}Add a comment (ENTER to skip):{RESET}")
-            try:
-                comment = input("  > ").strip()
-            except (EOFError, KeyboardInterrupt):
-                comment = ""
+            comment = _pick_or_type_comment(ctx, action="verify")
 
             print(f"  {DIM}Moving {key} to Verification...{RESET}",
                   end="", flush=True)
@@ -6537,12 +6657,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
         if choice == "y" and ctx and email and token:
             # [y] Put On Hold: In Progress → On Hold (required comment)
             key = ctx.get("issue_key", "?")
-            print(f"\n  {YELLOW}{BOLD}Reason for hold{RESET} "
-                  f"{DIM}(required):{RESET}")
-            try:
-                comment = input("  > ").strip()
-            except (EOFError, KeyboardInterrupt):
-                comment = ""
+            print(f"\n  {YELLOW}{BOLD}Reason for hold{RESET} {DIM}(required):{RESET}")
+            comment = _pick_or_type_comment(ctx, action="hold")
             if not comment:
                 print(f"  {YELLOW}Comment required. Cancelled.{RESET}")
                 _brief_pause()
@@ -6593,14 +6709,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             # [k] Close ticket: Verification → Closed (required comment)
             key = ctx.get("issue_key", "?")
             print(f"\n  {RED}{BOLD}Closing {key}{RESET}")
-            print(f"  {DIM}A closing comment is required. Example:{RESET}")
-            print(f"  {DIM}  Work performed: [summary]. "
-                  f"No recurrence during verification.{RESET}")
-            print()
-            try:
-                comment = input("  > ").strip()
-            except (EOFError, KeyboardInterrupt):
-                comment = ""
+            comment = _pick_or_type_comment(ctx, action="close")
             if not comment:
                 print(f"  {YELLOW}Comment required. Cancelled.{RESET}")
                 _brief_pause()
@@ -7635,6 +7744,8 @@ _DEFAULT_STATE = {
     "last_ticket": None,
     "bookmarks": [],
     "weekend_robin": {},
+    "walkthrough_notes": [],
+    "walkthrough_session": None,
 }
 
 
