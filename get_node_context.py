@@ -5949,7 +5949,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             key = ctx.get("issue_key", "?")
             status_lower = ctx.get("status", "").lower()
             if status_lower not in ("to do", "new", "open",
-                                    "waiting for triage", "reopened"):
+                                    "waiting for triage", "awaiting triage",
+                                    "awaiting support", "reopened"):
                 continue
 
             # Auto-assign if unassigned
