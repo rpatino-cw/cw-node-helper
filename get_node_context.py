@@ -576,6 +576,8 @@ def _grab_ticket(key: str, email: str, token: str) -> bool:
         body={"accountId": account_id},
     )
     if resp.status_code == 204:
+        _ntfy_send("Ticket Grabbed", f"{key} assigned to you",
+                   tags="hand")
         return True
     if resp.status_code == 403:
         print(f"  {DIM}Permission denied — cannot assign {key}.{RESET}")
@@ -3651,10 +3653,10 @@ def _trace_connection(ctx: dict, iface: dict):
             endpoints.append({
                 "device": dev.get("display") or dev.get("name") or "?",
                 "port": far.get("display") or far.get("name") or "?",
-                "rack": dev.get("rack", {}).get("display") if dev.get("rack") else None,
+                "rack": (dev.get("rack") or {}).get("display"),
                 "position": dev.get("position"),
-                "cable_id": cable.get("id") if cable else None,
-                "cable_label": cable.get("label") or cable.get("display") if cable else None,
+                "cable_id": cable.get("id"),
+                "cable_label": cable.get("label") or cable.get("display"),
             })
 
     if not endpoints:
@@ -6072,8 +6074,12 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             base_url = f"https://fleetops-storage.cwobject.com/diags/{tag}"
             print(f"\n  {DIM}Fetching Fleet Diags for {tag}...{RESET}")
             try:
-                resp = _session.get(f"{base_url}/index.html", timeout=(5, 15))
-                if resp.ok:
+                # Use curl to avoid Python SSL issues with old LibreSSL
+                _curl_result = subprocess.run(
+                    ["curl", "-s", "--max-time", "15", f"{base_url}/index.html"],
+                    capture_output=True, text=True, timeout=20)
+                _curl_ok = _curl_result.returncode == 0 and _curl_result.stdout.strip()
+                if _curl_ok:
                     # Parse log URLs from HTML
                     import html.parser
                     _fd_links = []
@@ -6104,7 +6110,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                                 self._in_td = False
                             elif tag == "tr" and self._cur_row.get("url"):
                                 _fd_links.append(dict(self._cur_row))
-                    _LinkParser().feed(resp.text)
+                    _LinkParser().feed(_curl_result.stdout)
 
                     if _fd_links:
                         print(f"\n  {BOLD}Fleet Diags — {tag}{RESET}  {DIM}({len(_fd_links)} logs){RESET}\n")
@@ -6136,16 +6142,17 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                                 for lg in _fd_links:
                                     if lg["url"].endswith(pname) and fetched < 4:
                                         try:
-                                            lr = _session.get(lg["url"], timeout=(5, 15))
-                                            if lr.ok and len(lr.text) < 15000:
-                                                log_text.append(f"\n--- {pname} ---\n{lr.text}")
+                                            _lr = subprocess.run(
+                                                ["curl", "-s", "--max-time", "15", lg["url"]],
+                                                capture_output=True, text=True, timeout=20)
+                                            if _lr.returncode == 0 and _lr.stdout:
+                                                content = _lr.stdout
+                                                if len(content) < 15000:
+                                                    log_text.append(f"\n--- {pname} ---\n{content}")
+                                                else:
+                                                    log_text.append(f"\n--- {pname} (truncated) ---\n{content[:10000]}")
                                                 fetched += 1
                                                 print(f"    {GREEN}Fetched {pname}{RESET}")
-                                            elif lr.ok:
-                                                # Truncate large logs
-                                                log_text.append(f"\n--- {pname} (truncated) ---\n{lr.text[:10000]}")
-                                                fetched += 1
-                                                print(f"    {GREEN}Fetched {pname} (truncated){RESET}")
                                         except Exception:
                                             pass
                                         break
@@ -6163,7 +6170,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                         print(f"  {DIM}Opening in browser instead...{RESET}")
                         webbrowser.open(f"{base_url}/index.html")
                 else:
-                    print(f"  {YELLOW}Could not fetch diags (HTTP {resp.status_code}).{RESET}")
+                    print(f"  {YELLOW}Could not fetch diags for {tag}.{RESET}")
                     print(f"  {DIM}Opening in browser...{RESET}")
                     webbrowser.open(f"{base_url}/index.html")
             except Exception as e:
