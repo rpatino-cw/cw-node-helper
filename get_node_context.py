@@ -859,6 +859,19 @@ def _netbox_get_interfaces(device_id: int) -> list:
     return data.get("results", [])
 
 
+def _netbox_trace_interface(iface_id: int) -> list:
+    """Trace a cable path from an interface through all hops.
+
+    Calls /api/dcim/interfaces/{id}/trace/ and returns a list of hops.
+    Each hop is a list of [near_end, cable, far_end] segments.
+    Returns empty list on error.
+    """
+    data = _netbox_get(f"/dcim/interfaces/{iface_id}/trace/")
+    if not data or not isinstance(data, list):
+        return []
+    return data
+
+
 def _netbox_get_rack_devices(rack_id: int) -> list:
     """Get all devices in a rack by NetBox rack ID.
 
@@ -1086,6 +1099,7 @@ def _build_netbox_context(service_tag: str | None,
                 "peer_port": peer_port_short,
                 "peer_rack": peer_rack,
                 "cable_id": cable_id,
+                "iface_id": iface.get("id"),
                 "connected_to": f"{peer_name_full}:{peer_port}",
             })
 
@@ -1599,19 +1613,51 @@ def _fetch_sla(issue_key: str, email: str, token: str) -> list:
 
 
 def _search_by_text(query_text: str, email: str, token: str) -> list:
-    """Search DO and HO projects for issues matching query_text.
+    """Search DO/HO/SDA projects for issues matching query_text.
 
     Searches across:
       - text (summary + description)
       - cf[10193] (service_tag)
       - cf[10192] (hostname)
+      - assignee (display name)
     """
     projects = ", ".join(f'"{p}"' for p in SEARCH_PROJECTS)
+    escaped = _escape_jql(query_text)
+
+    # Try assignee search first if the query looks like a person name
+    # (2+ words, all alpha, no digits/dashes — likely a name not a serial)
+    words = query_text.strip().split()
+    is_name = (len(words) >= 2 and
+               all(w.replace("'", "").replace("-", "").isalpha() for w in words))
+
+    if is_name:
+        # Search by assignee (open tickets first, then all)
+        jql_assignee = (
+            f'project in ({projects}) AND '
+            f'assignee = "{escaped}" AND statusCategory != Done '
+            f'ORDER BY updated DESC'
+        )
+        results = _jql_search(jql_assignee, email, token, max_results=20,
+                              fields=["key", "summary", "status", "issuetype", "assignee"])
+        if results:
+            return results
+        # Try without status filter
+        jql_assignee_all = (
+            f'project in ({projects}) AND '
+            f'assignee = "{escaped}" '
+            f'ORDER BY updated DESC'
+        )
+        results = _jql_search(jql_assignee_all, email, token, max_results=20,
+                              fields=["key", "summary", "status", "issuetype", "assignee"])
+        if results:
+            return results
+
+    # Fallback: text + custom field search
     jql = (
         f'project in ({projects}) AND '
-        f'(text ~ "{_escape_jql(query_text)}" '
-        f'OR cf[10193] ~ "{_escape_jql(query_text)}" '   # service_tag field
-        f'OR cf[10192] ~ "{_escape_jql(query_text)}")'    # hostname field
+        f'(text ~ "{escaped}" '
+        f'OR cf[10193] ~ "{escaped}" '   # service_tag field
+        f'OR cf[10192] ~ "{escaped}")'    # hostname field
     )
     return _jql_search(jql, email, token,
                        fields=["key", "summary", "status", "issuetype"])
@@ -3555,6 +3601,100 @@ def _handle_new_tickets(email: str, token: str) -> str | None:
 # Inline display helpers (triggered by hotkeys in action panel)
 # ---------------------------------------------------------------------------
 
+def _trace_connection(ctx: dict, iface: dict):
+    """Visually trace a cable path from this node to the peer device."""
+    iface_id = iface.get("iface_id")
+    if not iface_id:
+        print(f"  {DIM}No interface ID — cannot trace.{RESET}")
+        return
+
+    print(f"\n  {DIM}Tracing cable path...{RESET}", flush=True)
+    hops = _netbox_trace_interface(iface_id)
+    if not hops:
+        print(f"  {DIM}Trace unavailable (API returned no data).{RESET}")
+        return
+
+    # Parse hops into a flat list of endpoints
+    # NetBox trace returns [[near_end, cable, far_end], ...]
+    endpoints = []
+    for segment in hops:
+        if not isinstance(segment, list) or len(segment) < 3:
+            continue
+        near, cable, far = segment[0], segment[1], segment[2]
+        if not endpoints:
+            # First segment — include the near end (our interface)
+            dev = near.get("device", {}) if near else {}
+            endpoints.append({
+                "device": dev.get("display") or dev.get("name") or "?",
+                "port": near.get("display") or near.get("name") or "?",
+                "rack": dev.get("rack", {}).get("display") if dev.get("rack") else None,
+                "position": dev.get("position"),
+                "cable_id": cable.get("id") if cable else None,
+                "cable_label": cable.get("label") or cable.get("display") if cable else None,
+            })
+        # Always include the far end
+        if far:
+            dev = far.get("device", {}) if far else {}
+            endpoints.append({
+                "device": dev.get("display") or dev.get("name") or "?",
+                "port": far.get("display") or far.get("name") or "?",
+                "rack": dev.get("rack", {}).get("display") if dev.get("rack") else None,
+                "position": dev.get("position"),
+                "cable_id": cable.get("id") if cable else None,
+                "cable_label": cable.get("label") or cable.get("display") if cable else None,
+            })
+
+    if not endpoints:
+        print(f"  {DIM}Could not parse trace data.{RESET}")
+        return
+
+    port_name = iface.get("name", "?")
+    speed = iface.get("speed", "")
+    print(f"\n  {BOLD}Cable Trace: {port_name}{RESET}", end="")
+    if speed:
+        print(f"  {DIM}({speed}){RESET}")
+    else:
+        print()
+    print(f"  {'═' * 54}")
+
+    # Render each endpoint as a box with connecting arrows
+    for i, ep in enumerate(endpoints):
+        dev_short = _short_device_name(ep["device"])
+        port_display = ep["port"].split(":")[-1] if ":" in ep["port"] else ep["port"]
+        rack_str = ""
+        if ep.get("rack"):
+            # Extract just rack number from display like "US-CENTRAL-07A.DH1.R244"
+            rm = re.search(r"R(\d+)", ep["rack"])
+            rack_str = f"R{rm.group(1).lstrip('0') or '0'}" if rm else ep["rack"]
+        pos_str = f"U{ep['position']}" if ep.get("position") else ""
+        loc = " · ".join(filter(None, [rack_str, pos_str]))
+
+        # Label: "Your Node" for first, short device name for others
+        if i == 0:
+            label = f"{CYAN}{BOLD}Your Node{RESET}"
+        else:
+            label = f"{BOLD}{dev_short}{RESET}"
+
+        print(f"\n  {label}")
+        print(f"  {DIM}{ep['device']}{RESET}")
+        if loc:
+            print(f"  {DIM}{loc}{RESET}")
+        print(f"  ┌{'─' * 22}┐")
+        print(f"  │  {port_display:<20}│")
+        print(f"  └{'─' * 22}┘")
+
+        # Draw connecting arrow to next hop (if not last)
+        if i < len(endpoints) - 1:
+            cable_id = ep.get("cable_id")
+            cable_tag = f"  {DIM}cable #{cable_id}{RESET}" if cable_id else ""
+            print(f"       ║{cable_tag}")
+            if speed:
+                print(f"       ║  {DIM}{speed}{RESET}")
+            print(f"       ▼")
+
+    print()
+
+
 def _print_connections_inline(ctx: dict):
     """Print network connections with speed, short names, and NetBox links."""
     netbox = ctx.get("netbox", {})
@@ -3639,7 +3779,7 @@ def _print_connections_inline(ctx: dict):
     ai_hint = f"  {DIM}\u2502  'ai' to chat about connections{RESET}" if _ai_available() else ""
     print(f"\n  {DIM}{len(all_ifaces)} connections{RESET}", end="")
     if has_cables:
-        print(f"  {DIM}\u2502  Type # to open cable in NetBox{RESET}{ai_hint}")
+        print(f"  {DIM}\u2502  Type # to open cable  ·  t# to trace{RESET}{ai_hint}")
     else:
         print(ai_hint)
 
@@ -3654,6 +3794,14 @@ def _print_connections_inline(ctx: dict):
         email = os.environ.get("JIRA_EMAIL", "")
         token = os.environ.get("JIRA_API_TOKEN", "")
         _ai_dispatch(ctx=ctx, email=email, token=token, initial_msg=initial)
+    elif raw.lower().startswith("t") and raw[1:].isdigit() and has_cables:
+        idx = int(raw[1:]) - 1
+        if 0 <= idx < len(all_ifaces):
+            _trace_connection(ctx, all_ifaces[idx])
+            try:
+                input(f"  {DIM}Press Enter to continue...{RESET}")
+            except (EOFError, KeyboardInterrupt):
+                pass
     elif raw.isdigit() and has_cables:
         idx = int(raw) - 1
         if 0 <= idx < len(all_ifaces):
@@ -4816,7 +4964,7 @@ def _print_netbox_info_inline(device: dict, email: str = "", token: str = ""):
                     "name": port_name, "role": role, "speed": speed,
                     "peer_device": peer_short, "peer_device_full": peer_name_full,
                     "peer_port": peer_port_short, "peer_rack": peer_rack,
-                    "cable_id": cable_id,
+                    "cable_id": cable_id, "iface_id": iface.get("id"),
                     "connected_to": f"{peer_name_full}:{peer_port}",
                 })
             # Include uncabled IB ports so DCTs can see they exist
