@@ -1955,9 +1955,10 @@ def _ai_available() -> bool:
 
 
 def _build_ai_context(ctx: dict) -> str:
-    """Serialize a ticket context dict into plain text for AI prompts.
+    """Serialize a ticket context dict into rich plain text for AI prompts.
 
-    Truncates long fields to stay within token budgets (~12k chars max).
+    Includes full description, all comments, connection details, HO context,
+    and diagnostic info for thorough troubleshooting assistance.
     """
     if not ctx:
         return "(no ticket context loaded)"
@@ -1969,6 +1970,9 @@ def _build_ai_context(ctx: dict) -> str:
     age = ctx.get("status_age_seconds")
     age_str = f" (for {_format_age(age)})" if age else ""
     lines.append(f"STATUS: {status}{age_str}")
+    lines.append(f"PROJECT: {ctx.get('project', '?')}")
+    lines.append(f"TYPE: {ctx.get('issue_type', '?')}")
+    lines.append(f"PRIORITY: {ctx.get('priority') or '?'}")
     lines.append(f"ASSIGNEE: {ctx.get('assignee') or 'Unassigned'}")
     lines.append(f"REPORTER: {ctx.get('reporter') or '?'}")
     lines.append(f"SITE: {ctx.get('site') or '?'}")
@@ -1977,62 +1981,113 @@ def _build_ai_context(ctx: dict) -> str:
     lines.append(f"HOSTNAME: {ctx.get('hostname') or '?'}")
     lines.append(f"VENDOR: {ctx.get('vendor') or '?'}")
 
-    ip = ctx.get("ip_address") or ctx.get("netbox", {}).get("primary_ip")
+    # Extra device fields from NetBox
+    nb = ctx.get("netbox", {})
+    if nb.get("asset_tag"):
+        lines.append(f"ASSET TAG: {nb['asset_tag']}")
+    if nb.get("device_type"):
+        lines.append(f"MODEL: {nb.get('manufacturer', '')} {nb['device_type']}")
+    if nb.get("status"):
+        lines.append(f"NB STATUS: {nb['status']}")
+
+    ip = ctx.get("ip_address") or nb.get("primary_ip")
     if ip:
         lines.append(f"IP: {ip}")
+    if nb.get("oob_ip"):
+        lines.append(f"OOB/BMC IP: {nb['oob_ip']}")
 
-    # Description (truncate to 2000 chars)
+    # RMA reason if present
+    if ctx.get("rma_reason"):
+        lines.append(f"RMA REASON: {ctx['rma_reason']}")
+
+    # Full description (generous limit for troubleshooting)
     desc = ctx.get("description_text", "")
     if desc:
-        if len(desc) > 2000:
-            desc = desc[:1997] + "..."
-        lines.append(f"\nDESCRIPTION:\n{desc}")
+        if len(desc) > 4000:
+            desc = desc[:3997] + "..."
+        lines.append(f"\nFULL DESCRIPTION:\n{desc}")
 
-    # Comments — lazy-parse if needed
+    # All comments — full text, not truncated (critical for troubleshooting)
     comments = ctx.get("comments") or []
     if not comments and ctx.get("_raw_comments"):
         comments = _extract_comments(
-            {"comment": {"comments": ctx["_raw_comments"]}}, max_comments=10)
+            {"comment": {"comments": ctx["_raw_comments"]}}, max_comments=20)
     if comments:
-        lines.append(f"\nCOMMENTS ({len(comments)} most recent):")
-        for c in comments[:10]:
+        lines.append(f"\nALL COMMENTS ({len(comments)}):")
+        for c in comments:
             body = c.get("body", "")
-            if len(body) > 500:
-                body = body[:497] + "..."
-            lines.append(f"  [{c.get('created', '?')}] {c.get('author', '?')}: {body}")
+            if len(body) > 1500:
+                body = body[:1497] + "..."
+            lines.append(f"  [{c.get('created', '?')}] {c.get('author', '?')}:")
+            lines.append(f"    {body}")
 
-    # NetBox enrichment
-    nb = ctx.get("netbox", {})
-    if nb:
-        nb_lines = []
-        if nb.get("manufacturer"):
-            nb_lines.append(f"  Model: {nb.get('manufacturer')} {nb.get('device_type', '')}")
-        if nb.get("oob_ip"):
-            nb_lines.append(f"  OOB IP: {nb['oob_ip']}")
-        if nb.get("primary_ip"):
-            nb_lines.append(f"  Primary IP: {nb['primary_ip']}")
-        ifaces = nb.get("interfaces", [])
-        if ifaces:
-            nb_lines.append(f"  Interfaces: {len(ifaces)}")
-        if nb_lines:
-            lines.append("\nNETBOX:")
-            lines.extend(nb_lines)
+    # NetBox connections — full detail for troubleshooting
+    ifaces = nb.get("interfaces", [])
+    if ifaces:
+        lines.append(f"\nNETWORK CONNECTIONS ({len(ifaces)}):")
+        for iface in ifaces:
+            name = iface.get("name", "?")
+            role = iface.get("role", "")
+            speed = iface.get("speed", "")
+            peer = iface.get("peer_device", "")
+            peer_port = iface.get("peer_port", "")
+            peer_rack = iface.get("peer_rack", "")
+            uncabled = iface.get("_uncabled", False)
+            status_str = " [UNCABLED]" if uncabled else ""
+            peer_str = f" → {peer}:{peer_port}" if peer else ""
+            rack_str = f" (rack {peer_rack})" if peer_rack else ""
+            lines.append(f"  {name} ({speed} {role}){peer_str}{rack_str}{status_str}")
 
-    # Linked issues
+    # Linked issues with summaries
     linked = ctx.get("linked_issues", [])
     if linked:
-        parts = [f"{l.get('key', '?')} ({l.get('status', '?')})" for l in linked[:5]]
-        lines.append(f"\nLINKED ISSUES: {', '.join(parts)}")
+        lines.append(f"\nLINKED ISSUES:")
+        for l in linked[:8]:
+            rel = l.get("relationship", "")
+            lines.append(f"  {l.get('key', '?')} [{l.get('status', '?')}] {rel} — {l.get('summary', '')}")
 
-    # HO context
+    # HO context — full detail
     ho = ctx.get("ho_context")
     if ho and isinstance(ho, dict):
-        lines.append(f"\nLINKED HO: {ho.get('key', '?')} — {ho.get('status', '?')}: {ho.get('summary', '?')}")
+        lines.append(f"\nLINKED HO TICKET:")
+        lines.append(f"  Key: {ho.get('key', '?')}")
+        lines.append(f"  Status: {ho.get('status', '?')}")
+        lines.append(f"  Summary: {ho.get('summary', '?')}")
+        if ho.get("hint"):
+            lines.append(f"  Guidance: {ho['hint']}")
+        if ho.get("last_note"):
+            lines.append(f"  Last note: {ho['last_note']}")
+
+    # Diagnostic links
+    diags = ctx.get("diag_links", [])
+    if diags:
+        lines.append(f"\nDIAGNOSTIC LINKS:")
+        for d in diags:
+            lines.append(f"  {d.get('label', '?')}: {d.get('url', '?')}")
+
+    # Grafana URLs
+    grafana = ctx.get("grafana", {})
+    if grafana:
+        for label, url in grafana.items():
+            if url:
+                lines.append(f"  Grafana {label}: {url}")
+
+    # SLA info
+    sla = ctx.get("sla")
+    if sla and isinstance(sla, list):
+        lines.append(f"\nSLA:")
+        for s in sla:
+            name = s.get("name", "?")
+            ongoing = s.get("ongoingCycle", {})
+            if ongoing:
+                breached = ongoing.get("breached", False)
+                remaining = ongoing.get("remainingTime", {}).get("friendly", "?")
+                lines.append(f"  {name}: {'BREACHED' if breached else remaining}")
 
     result = "\n".join(lines)
-    # Hard cap at 12000 chars
-    if len(result) > 12000:
-        result = result[:11997] + "..."
+    # Increased cap for thorough troubleshooting context
+    if len(result) > 20000:
+        result = result[:19997] + "..."
     return result
 
 
@@ -6106,11 +6161,12 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _print_pretty(ctx)
             continue
 
-        # --- AI Assistant ---
-        if choice == "ai" and ctx:
-            found_key = _ai_dispatch(ctx=ctx, email=email or "", token=token or "")
+        # --- AI Assistant (supports "ai" or "ai <message>") ---
+        if (choice == "ai" or choice.startswith("ai ")) and ctx:
+            initial = choice[3:].strip() if choice.startswith("ai ") else ""
+            found_key = _ai_dispatch(ctx=ctx, email=email or "", token=token or "",
+                                      initial_msg=initial)
             if found_key and JIRA_KEY_PATTERN.match(found_key):
-                # User found a ticket via AI — load it
                 new_ctx = _fetch_and_show(found_key, email, token)
                 if new_ctx:
                     ctx = new_ctx
