@@ -287,14 +287,17 @@ class TestDetailViewRouting(unittest.TestCase):
              patch("builtins.print"), \
              patch.object(gnc, "_print_action_panel"), \
              patch.object(gnc, "_print_pretty"), \
-             patch.object(gnc, "_clear_screen"):
+             patch.object(gnc, "_clear_screen"), \
+             patch.object(gnc, "_refresh_ctx"), \
+             patch.object(gnc, "_brief_pause"):
             return gnc._post_detail_prompt(ctx, **kw)
 
     def test_b_returns_back(self):
         self.assertEqual(self._run_prompt(["b"]), "back")
 
-    def test_enter_returns_back(self):
-        self.assertEqual(self._run_prompt([""]), "back")
+    def test_enter_refreshes_then_b_returns_back(self):
+        """Enter refreshes the view (loops), then b returns back."""
+        self.assertEqual(self._run_prompt(["", "b"]), "back")
 
     def test_m_returns_menu(self):
         self.assertEqual(self._run_prompt(["m"]), "menu")

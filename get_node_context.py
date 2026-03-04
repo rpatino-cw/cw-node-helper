@@ -43,11 +43,18 @@ except ImportError:
     print("Error: 'requests' module not found. Install with: pip install requests")
     sys.exit(1)
 
+try:
+    import openai as _openai_mod
+    _HAS_OPENAI = True
+except ImportError:
+    _openai_mod = None
+    _HAS_OPENAI = False
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "6.2.2"
+APP_VERSION = "6.3.0"
 
 JIRA_BASE_URL = "https://coreweave.atlassian.net"
 
@@ -132,6 +139,42 @@ TRANSITION_MAP = {
         "transition_hints": ["close", "done", "resolve", "complete"],
     },
 }
+
+# ---------------------------------------------------------------------------
+# AI Assistant (OpenAI) — optional
+# ---------------------------------------------------------------------------
+AI_MODEL = "gpt-4o"
+AI_MAX_TOKENS = 1024
+AI_TEMPERATURE = 0.3
+
+AI_SYSTEM_PROMPT_TICKET = (
+    "You are a data center operations assistant embedded in a CLI tool called cwhelper. "
+    "You help CoreWeave DCT technicians understand Jira tickets and troubleshoot node issues.\n\n"
+    "Context you receive:\n"
+    "- Jira ticket details (key, summary, status, assignee, description, comments)\n"
+    "- NetBox device data (rack location, interfaces, IPs, model)\n"
+    "- Grafana dashboard links\n\n"
+    "Rules:\n"
+    "- Be concise. Technicians are on the data center floor.\n"
+    "- Use plain English, no jargon unless the ticket uses it.\n"
+    "- When summarizing, lead with: what the issue is, what has been done, what the likely next step is.\n"
+    "- When troubleshooting, reference specific fields from the ticket context.\n"
+    "- If you don't know something, say so. Never invent ticket data."
+)
+
+AI_SYSTEM_PROMPT_FINDER = (
+    "You are a search assistant for CoreWeave Jira tickets. "
+    "The user will describe what they remember about a ticket. Your job is to:\n"
+    "1. Extract search keywords from their description.\n"
+    "2. After seeing search results, rank them by relevance and explain why each might be the one.\n"
+    "Be concise. Format output for a terminal (no markdown headers, use plain text)."
+)
+
+AI_SYSTEM_PROMPT_CHAT = (
+    "You are a helpful assistant for data center technicians at CoreWeave. "
+    "You have access to the current ticket context if provided. Answer questions naturally. "
+    "Be concise — this is a terminal interface. No markdown formatting."
+)
 
 # Data hall layout config — stored next to this script
 _DH_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dh_layouts.json")
@@ -1599,7 +1642,7 @@ def _prompt_select(items: list, label_fn, extra_hint: str = "") -> dict | str | 
         print(label_fn(i, item))
     print()
 
-    prompt_text = f"  Type a number (1-{len(items)}){extra_hint}, or ENTER to go back: "
+    prompt_text = f"  Type a number (1-{len(items)}){extra_hint}, {BOLD}b{RESET} back, {BOLD}m{RESET} menu, or ENTER to refresh: "
     for _ in range(3):
         try:
             raw = input(prompt_text).strip()
@@ -1607,8 +1650,16 @@ def _prompt_select(items: list, label_fn, extra_hint: str = "") -> dict | str | 
             print()
             return None
 
-        if raw.lower() in ("q", "quit", "exit", "b", "back", ""):
+        if raw == "":
+            return "refresh"
+        if raw.lower() in ("q", "quit", "exit"):
+            return "quit"
+        if raw.lower() in ("m", "menu"):
+            return "menu"
+        if raw.lower() in ("b", "back"):
             return None
+        if raw.lower() == "ai":
+            return "ai"
         # Pass through single-letter/special commands to the caller
         if raw.lower() in ("x", "n", "a", "e") or raw == "*":
             return raw
@@ -1855,6 +1906,377 @@ def _build_context(identifier: str, issue: dict,
 
 
 # ---------------------------------------------------------------------------
+# AI Assistant — OpenAI integration (optional)
+# ---------------------------------------------------------------------------
+
+def _ai_available() -> bool:
+    """Return True if OpenAI is configured and importable."""
+    return _HAS_OPENAI and bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+def _build_ai_context(ctx: dict) -> str:
+    """Serialize a ticket context dict into plain text for AI prompts.
+
+    Truncates long fields to stay within token budgets (~12k chars max).
+    """
+    if not ctx:
+        return "(no ticket context loaded)"
+
+    lines = []
+    lines.append(f"TICKET: {ctx.get('issue_key', '?')}")
+    lines.append(f"SUMMARY: {ctx.get('summary', '?')}")
+    status = ctx.get("status", "?")
+    age = ctx.get("status_age_seconds")
+    age_str = f" (for {_format_age(age)})" if age else ""
+    lines.append(f"STATUS: {status}{age_str}")
+    lines.append(f"ASSIGNEE: {ctx.get('assignee') or 'Unassigned'}")
+    lines.append(f"REPORTER: {ctx.get('reporter') or '?'}")
+    lines.append(f"SITE: {ctx.get('site') or '?'}")
+    lines.append(f"RACK: {ctx.get('rack_location') or '?'}")
+    lines.append(f"SERVICE TAG: {ctx.get('service_tag') or '?'}")
+    lines.append(f"HOSTNAME: {ctx.get('hostname') or '?'}")
+    lines.append(f"VENDOR: {ctx.get('vendor') or '?'}")
+
+    ip = ctx.get("ip_address") or ctx.get("netbox", {}).get("primary_ip")
+    if ip:
+        lines.append(f"IP: {ip}")
+
+    # Description (truncate to 2000 chars)
+    desc = ctx.get("description_text", "")
+    if desc:
+        if len(desc) > 2000:
+            desc = desc[:1997] + "..."
+        lines.append(f"\nDESCRIPTION:\n{desc}")
+
+    # Comments — lazy-parse if needed
+    comments = ctx.get("comments") or []
+    if not comments and ctx.get("_raw_comments"):
+        comments = _extract_comments(
+            {"comment": {"comments": ctx["_raw_comments"]}}, max_comments=10)
+    if comments:
+        lines.append(f"\nCOMMENTS ({len(comments)} most recent):")
+        for c in comments[:10]:
+            body = c.get("body", "")
+            if len(body) > 500:
+                body = body[:497] + "..."
+            lines.append(f"  [{c.get('created', '?')}] {c.get('author', '?')}: {body}")
+
+    # NetBox enrichment
+    nb = ctx.get("netbox", {})
+    if nb:
+        nb_lines = []
+        if nb.get("manufacturer"):
+            nb_lines.append(f"  Model: {nb.get('manufacturer')} {nb.get('device_type', '')}")
+        if nb.get("oob_ip"):
+            nb_lines.append(f"  OOB IP: {nb['oob_ip']}")
+        if nb.get("primary_ip"):
+            nb_lines.append(f"  Primary IP: {nb['primary_ip']}")
+        ifaces = nb.get("interfaces", [])
+        if ifaces:
+            nb_lines.append(f"  Interfaces: {len(ifaces)}")
+        if nb_lines:
+            lines.append("\nNETBOX:")
+            lines.extend(nb_lines)
+
+    # Linked issues
+    linked = ctx.get("linked_issues", [])
+    if linked:
+        parts = [f"{l.get('key', '?')} ({l.get('status', '?')})" for l in linked[:5]]
+        lines.append(f"\nLINKED ISSUES: {', '.join(parts)}")
+
+    # HO context
+    ho = ctx.get("ho_context")
+    if ho and isinstance(ho, dict):
+        lines.append(f"\nLINKED HO: {ho.get('key', '?')} — {ho.get('status', '?')}: {ho.get('summary', '?')}")
+
+    result = "\n".join(lines)
+    # Hard cap at 12000 chars
+    if len(result) > 12000:
+        result = result[:11997] + "..."
+    return result
+
+
+def _ai_chat(messages: list, temperature: float = AI_TEMPERATURE,
+             max_tokens: int = AI_MAX_TOKENS, stream: bool = True) -> str:
+    """Send messages to OpenAI and stream the response to the terminal.
+
+    Returns the complete response text. Catches all errors gracefully.
+    """
+    if not _HAS_OPENAI:
+        return f"{YELLOW}AI not available. Install: pip install openai{RESET}"
+
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return f"{YELLOW}AI not available. Set OPENAI_API_KEY in .env{RESET}"
+
+    try:
+        client = _openai_mod.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=stream,
+        )
+
+        if not stream:
+            text = response.choices[0].message.content or ""
+            return text
+
+        # Streaming — print tokens as they arrive
+        collected = []
+        print(f"\n  {CYAN}{BOLD}AI:{RESET} ", end="", flush=True)
+        try:
+            for chunk in response:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    token = delta.content
+                    # Indent newlines for clean terminal output
+                    token = token.replace("\n", f"\n      ")
+                    print(token, end="", flush=True)
+                    collected.append(delta.content)
+        except KeyboardInterrupt:
+            pass  # Graceful stop on Ctrl+C
+        print(RESET)
+        return "".join(collected)
+
+    except Exception as e:
+        err_type = type(e).__name__
+        if "AuthenticationError" in err_type:
+            return f"{YELLOW}AI Error: Invalid API key. Check OPENAI_API_KEY in .env{RESET}"
+        if "RateLimitError" in err_type:
+            return f"{YELLOW}AI Error: Rate limited. Wait a moment and try again.{RESET}"
+        if "APIConnectionError" in err_type:
+            return f"{YELLOW}AI Error: Could not connect to OpenAI. Check internet.{RESET}"
+        return f"{YELLOW}AI Error: {e}{RESET}"
+
+
+def _ai_summarize(ctx: dict) -> str:
+    """Generate a one-shot summary of the current ticket."""
+    context_text = _build_ai_context(ctx)
+    messages = [
+        {"role": "system", "content": AI_SYSTEM_PROMPT_TICKET},
+        {"role": "user", "content": (
+            "Summarize this ticket. What is the issue, what has been done, "
+            "and what should happen next?\n\n" + context_text
+        )},
+    ]
+    return _ai_chat(messages, temperature=0.3)
+
+
+def _ai_find_ticket(user_description: str, email: str, token: str) -> str | None:
+    """Help user find a ticket they can't remember.
+
+    Flow: AI extracts keywords -> JQL search -> AI ranks results.
+    Returns the selected ticket key, or None.
+    """
+    # Step 1: Extract search keywords
+    print(f"\n  {DIM}Extracting search terms...{RESET}", flush=True)
+    keyword_messages = [
+        {"role": "system", "content": AI_SYSTEM_PROMPT_FINDER},
+        {"role": "user", "content": (
+            f"Extract 2-3 Jira search keywords from this description. "
+            f"Return ONLY the keywords separated by spaces, nothing else.\n\n"
+            f"Description: {user_description}"
+        )},
+    ]
+    keywords = _ai_chat(keyword_messages, stream=False, temperature=0.2).strip()
+    if not keywords or keywords.startswith(YELLOW):
+        print(f"  {keywords}")
+        return None
+
+    print(f"  {DIM}Searching for:{RESET} {WHITE}{keywords}{RESET}", flush=True)
+
+    # Step 2: Search Jira
+    results = _search_by_text(keywords, email, token)
+    if not results:
+        # Try individual words
+        for word in keywords.split():
+            if len(word) >= 3:
+                results = _search_by_text(word, email, token)
+                if results:
+                    break
+    if not results:
+        print(f"\n  {YELLOW}No tickets found matching that description.{RESET}")
+        print(f"  {DIM}Try different details or use option 3 (Browse queue).{RESET}")
+        return None
+
+    # Step 3: Format results and ask AI to rank
+    result_lines = []
+    for i, issue in enumerate(results[:10], 1):
+        key = issue.get("key", "?")
+        summary = issue.get("fields", {}).get("summary", "?")
+        status = issue.get("fields", {}).get("status", {}).get("name", "?")
+        result_lines.append(f"  {i}. {key} [{status}] — {summary}")
+
+    result_text = "\n".join(result_lines)
+    print(f"\n  {DIM}Found {len(results)} results. Ranking...{RESET}\n")
+
+    rank_messages = [
+        {"role": "system", "content": AI_SYSTEM_PROMPT_FINDER},
+        {"role": "user", "content": (
+            f"The user described: \"{user_description}\"\n\n"
+            f"Here are the search results:\n{result_text}\n\n"
+            f"Rank the top 3 most likely matches and briefly explain why."
+        )},
+    ]
+    _ai_chat(rank_messages, temperature=0.3)
+
+    # Step 4: Let user pick
+    print(f"\n\n  {DIM}Select a ticket [1-{min(len(results), 10)}], enter a key, or ENTER to cancel:{RESET}")
+    try:
+        pick = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+    if not pick:
+        return None
+    if pick.isdigit():
+        idx = int(pick) - 1
+        if 0 <= idx < len(results):
+            return results[idx].get("key")
+    if JIRA_KEY_PATTERN.match(pick.upper()):
+        return pick.upper()
+    return None
+
+
+def _ai_chat_loop(ctx: dict = None, queue_info: str = ""):
+    """Run an interactive AI chat session.
+
+    If ctx is provided, ticket context is included.
+    If queue_info is provided, queue listing is included as context.
+    Exit: 'back', 'quit', 'q', 'exit', or empty Enter.
+    """
+    # Build system message
+    if ctx:
+        system = AI_SYSTEM_PROMPT_TICKET
+        context_text = _build_ai_context(ctx)
+        label = ctx.get("issue_key", "ticket")
+    elif queue_info:
+        system = AI_SYSTEM_PROMPT_CHAT
+        context_text = queue_info
+        label = "queue"
+    else:
+        system = AI_SYSTEM_PROMPT_CHAT
+        context_text = ""
+        label = "general"
+
+    messages = [{"role": "system", "content": system}]
+    if context_text:
+        messages.append({"role": "user", "content": f"Here is my current context:\n\n{context_text}"})
+        messages.append({"role": "assistant", "content": "Got it. I can see the context. What would you like to know?"})
+
+    print(f"\n  {CYAN}{BOLD}{'─' * 40}{RESET}")
+    print(f"  {CYAN}{BOLD}AI Chat{RESET} {DIM}— {label}{RESET}")
+    print(f"  {DIM}Type 'back' to exit, 'clear' to reset{RESET}")
+    print(f"  {CYAN}{BOLD}{'─' * 40}{RESET}")
+
+    while True:
+        try:
+            user_input = input(f"\n  {GREEN}You:{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not user_input or user_input.lower() in ("back", "quit", "q", "exit"):
+            break
+
+        if user_input.lower() == "clear":
+            messages = [{"role": "system", "content": system}]
+            if context_text:
+                messages.append({"role": "user", "content": f"Here is my current context:\n\n{context_text}"})
+                messages.append({"role": "assistant", "content": "Context reloaded. What would you like to know?"})
+            print(f"  {DIM}Chat history cleared.{RESET}")
+            continue
+
+        if user_input.lower() == "summary" and ctx:
+            _ai_summarize(ctx)
+            continue
+
+        messages.append({"role": "user", "content": user_input})
+        response = _ai_chat(messages)
+        if response:
+            messages.append({"role": "assistant", "content": response})
+
+        # Cap history at 20 messages (keep system + context)
+        while len(messages) > 22:
+            # Remove oldest user/assistant pair after the system+context messages
+            start_idx = 3 if context_text else 1
+            if len(messages) > start_idx + 2:
+                del messages[start_idx]
+                del messages[start_idx]
+
+    print(f"\n  {DIM}Chat ended.{RESET}")
+
+
+def _ai_dispatch(ctx: dict = None, email: str = "", token: str = "",
+                 queue_info: str = ""):
+    """Universal AI entry point — called from any prompt in the app.
+
+    Shows a submenu based on available context, then dispatches.
+    """
+    if not _ai_available():
+        print(f"\n  {YELLOW}AI not available.{RESET}", end="")
+        if not _HAS_OPENAI:
+            print(f" Install: {WHITE}pip install openai{RESET}")
+        else:
+            print(f" Set {WHITE}OPENAI_API_KEY{RESET} in your .env file")
+        _brief_pause(1.5)
+        return
+
+    print(f"\n  {CYAN}{BOLD}AI Assistant{RESET}")
+    print(f"  {DIM}{'─' * 40}{RESET}")
+
+    options = []
+    if ctx:
+        options.append(("1", "Summarize this ticket"))
+        options.append(("2", "Ask about this ticket"))
+    if ctx or queue_info:
+        options.append(("3", "Free chat (with context)"))
+    else:
+        options.append(("3", "Free chat"))
+    options.append(("4", "Find a ticket (describe what you remember)"))
+    options.append(("b", "Back"))
+
+    for key, label in options:
+        if key == "b":
+            print(f"  {DIM}{key}{RESET}  {label}")
+        else:
+            print(f"  {BOLD}{key}{RESET}  {label}")
+    print()
+
+    try:
+        choice = input("  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if choice == "1" and ctx:
+        _ai_summarize(ctx)
+        print()
+        input(f"  {DIM}Press ENTER to continue...{RESET}")
+    elif choice == "2" and ctx:
+        _ai_chat_loop(ctx=ctx)
+    elif choice == "3":
+        _ai_chat_loop(ctx=ctx, queue_info=queue_info)
+    elif choice == "4":
+        print(f"\n  {DIM}Describe the ticket you're looking for:{RESET}")
+        try:
+            desc = input(f"  {GREEN}You:{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            desc = ""
+        if desc and email and token:
+            found_key = _ai_find_ticket(desc, email, token)
+            if found_key:
+                print(f"\n  {GREEN}Found: {WHITE}{BOLD}{found_key}{RESET}")
+                print(f"  {DIM}Returning to load this ticket...{RESET}")
+                _brief_pause(1)
+                # Store for caller to pick up
+                return found_key
+        elif desc:
+            print(f"  {YELLOW}Need Jira credentials to search.{RESET}")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Core — lookup
 # ---------------------------------------------------------------------------
 
@@ -1895,6 +2317,8 @@ def _fetch_and_show(identifier: str, email: str, token: str,
 
         print(f"  Found {len(issues)} matches:\n")
         chosen = _prompt_select(issues, _label)
+        if chosen in ("refresh", "menu", "quit"):
+            return None
         if not chosen:
             return None
 
@@ -1976,6 +2400,12 @@ def _run_stale_verification(stale_issues: list, email: str, token: str) -> str:
             input(f"  {DIM}Press ENTER to continue...{RESET}")
             continue
 
+        if chosen == "refresh":
+            continue
+        if chosen == "quit":
+            return "quit"
+        if chosen == "menu":
+            return "menu"
         if not chosen:
             return "menu"
 
@@ -2090,6 +2520,12 @@ def _run_queue_interactive(email: str, token: str, site: str,
                 f"{assignee_str}"
             )
 
+        # Prefetch top tickets in background while user reads the list
+        _prefetch_keys = [iss.get("key") for iss in issues[:5] if iss.get("key")]
+        for _pk in _prefetch_keys:
+            if _pk not in _issue_cache:
+                _executor.submit(_jira_get_issue, _pk, email, token)
+
         # Check if this queue is already bookmarked
         _q_params = {"project": project, "site": site,
                      "status_filter": status_filter, "mine_only": mine_only}
@@ -2102,6 +2538,15 @@ def _run_queue_interactive(email: str, token: str, site: str,
         if len(issues) >= limit:
             _page_hint = f", {BOLD}n{RESET} next page, {BOLD}a{RESET} load all"
         chosen = _prompt_select(issues, _queue_label, extra_hint=_bm_hint + _page_hint)
+
+        if chosen == "refresh":
+            continue  # re-fetch and re-render the queue
+
+        if chosen == "quit":
+            return "quit"
+
+        if chosen == "menu":
+            return "menu"
 
         if chosen == "n":
             limit += 20
@@ -2133,6 +2578,17 @@ def _run_queue_interactive(email: str, token: str, site: str,
                 print(f"\n  {GREEN}Bookmarked: {bm_label}{RESET}")
             time.sleep(0.5)
             continue  # re-render the queue
+
+        if chosen == "ai":
+            # Build queue context for AI from current listing
+            q_lines = [f"{project} queue for {site or 'all sites'} — filter: {status_filter}"]
+            for i, iss in enumerate(issues[:20], 1):
+                f = iss.get("fields") or {}
+                st_name = (f.get("status", {}).get("name", "?") if isinstance(f.get("status"), dict)
+                           else str(f.get("status", "?")))
+                q_lines.append(f"  {i}. {iss.get('key', '?')} [{st_name}] — {f.get('summary', '?')}")
+            _ai_dispatch(email=email, token=token, queue_info="\n".join(q_lines))
+            continue
 
         if not chosen:
             return "menu"
@@ -2241,6 +2697,12 @@ def _run_history_interactive(email: str, token: str, identifier: str,
 
         chosen = _prompt_select(issues, _history_label)
 
+        if chosen == "refresh":
+            continue
+        if chosen == "quit":
+            return "quit"
+        if chosen == "menu":
+            return "menu"
         if not chosen:
             return "back"
 
@@ -3080,6 +3542,250 @@ def _print_sla_detail(ctx: dict):
     print(f"  {DIM}{thin}{RESET}")
     print()
 
+    # ── Detect ticket category from summary ────────────────────────────────
+    summary = ctx.get("summary", "")
+    _cat_tag = ""
+    import re as _re_sla
+    _cat_m = _re_sla.match(r"^DO Ticket:\s*(\S+)\s*-", summary)
+    if _cat_m:
+        _cat_tag = _cat_m.group(1).upper()
+    _s_low = summary.lower()
+    diag_links = ctx.get("diag_links") or []
+    _diag_text = " ".join(d.get("label", "") for d in diag_links)
+
+    if _cat_tag == "POWER_CYCLE" or "power cycle" in _s_low or "power drain" in _s_low:
+        ticket_category = "POWER_CYCLE"
+    elif _cat_tag == "PSU_RESEAT" or "psu" in _s_low or "power supply" in _s_low or "psu-health" in _diag_text:
+        ticket_category = "PSU_RESEAT"
+    elif _re_sla.search(r"low.?light|light.?level|optic", _s_low):
+        ticket_category = "LOW_LIGHT"
+    elif "flap" in _s_low:
+        ticket_category = "PORT_FLAPPING"
+    elif _cat_tag == "NETWORK" or _re_sla.search(r"network|nic|link.?down|cable|transceiver|sfp", _s_low):
+        ticket_category = "NETWORK"
+    elif _cat_tag == "DEVICE" or "device" in _s_low or "hardware" in _s_low:
+        ticket_category = "DEVICE"
+    elif "failed state" in _s_low:
+        ticket_category = "FAILED_STATE"
+    elif "coolant" in _s_low or "cdu" in _s_low:
+        ticket_category = "COOLING"
+    elif "leak" in _s_low:
+        ticket_category = "LEAK"
+    elif "nvme" in _s_low or "drive" in _s_low or "disk" in _s_low or "ssd" in _s_low:
+        ticket_category = "DRIVE"
+    elif "gpu" in _s_low or "cold plate" in _s_low:
+        ticket_category = "GPU_HARDWARE"
+    else:
+        ticket_category = _cat_tag if _cat_tag else "OTHER"
+
+    # Category display labels and descriptions
+    _CATEGORY_INFO = {
+        "POWER_CYCLE": {
+            "label": "POWER CYCLE",
+            "color": YELLOW,
+            "verify_tips": [
+                "Confirm node came back online \u2014 ping BMC + OS IP",
+                "Check Grafana for pre-cycle metrics (thermal, GPU errors, kernel panics)",
+                "If repeat offender (>2 cycles) \u2192 escalate to hardware (suspect PSU, mobo, or BMC FW)",
+                "If no POST after cycle \u2192 AC power drain (pull both PSU cords 30s)",
+            ],
+            "work_tips": [
+                "Power drain node for duration specified in description",
+                "Reseat PSU cords firmly after drain period",
+                "Verify BMC comes back, then OS boots",
+                "Add comment with result: did it POST? BMC reachable? OS up?",
+            ],
+        },
+        "PSU_RESEAT": {
+            "label": "PSU RESEAT",
+            "color": YELLOW,
+            "verify_tips": [
+                "Verify both PSUs show green/healthy in iDRAC after reseat",
+                "Check PDU outlet is live if PSU still shows fault",
+                "If PSU fault persists after reseat \u2192 RMA the PSU",
+                "Confirm node has redundant power (both PSUs active)",
+            ],
+            "work_tips": [
+                "Fully remove PSU, inspect bay for dust/debris",
+                "Reseat firmly until latch clicks",
+                "Check the other PSU too \u2014 single-PSU = degraded redundancy",
+                "Verify both PSUs healthy in iDRAC, then move to verification",
+            ],
+        },
+        "NETWORK": {
+            "label": "NETWORK",
+            "color": CYAN,
+            "verify_tips": [
+                "Confirm link is up and stable (no flapping in last 24h)",
+                "Check TOR switch port for CRC errors, drops",
+                "Verify no new NETWORK tickets for same rack (shared TOR issue?)",
+                "Check IB connectivity if applicable",
+            ],
+            "work_tips": [
+                "Check TOR switch port status \u2014 link up/down?",
+                "Reseat cable at both NIC and TOR side",
+                "If single-port: reseat cable \u2192 test \u2192 swap cable \u2192 swap SFP",
+                "If multi-port same switch: escalate as TOR issue",
+            ],
+        },
+        "LOW_LIGHT": {
+            "label": "LOW LIGHT",
+            "color": MAGENTA,
+            "verify_tips": [
+                "Confirm light levels are within spec after cleaning/swap",
+                "Check both TX and RX \u2014 one side low = dirty, both = bad optic",
+                "If multiple ports on same switch had low light, verify all are clean",
+            ],
+            "work_tips": [
+                "Clean fiber ends with IPA wipes (both ends)",
+                "Reseat SFP modules on both ends",
+                "If still low after clean \u2192 replace the optic",
+                "Use optical power meter if available to verify dB levels",
+            ],
+        },
+        "PORT_FLAPPING": {
+            "label": "PORT FLAPPING",
+            "color": MAGENTA,
+            "verify_tips": [
+                "Confirm port has been stable for 24h+ (no flap events in logs)",
+                "Check switch logs: show log | grep swpN",
+                "Verify remote end (node NIC) is also stable",
+            ],
+            "work_tips": [
+                "Check cable integrity \u2014 swap with known-good",
+                "Look for bent pins on SFP/port",
+                "Check if remote end (node NIC) is also flapping",
+                "If persists after cable swap \u2192 try different switch port",
+            ],
+        },
+        "DEVICE": {
+            "label": "DEVICE",
+            "color": WHITE,
+            "verify_tips": [
+                "Ping BMC + OS IP \u2014 both reachable?",
+                "Check Grafana node_details dashboard for health overview",
+                "Verify no new alerts since your fix",
+                "If multiple DEVICE tickets in same rack \u2192 check shared infra",
+            ],
+            "work_tips": [
+                "Ping BMC/oob_ip \u2014 if unreachable, physical visit needed",
+                "Pull Grafana node_details for health overview",
+                "Check NetBox status (Active? Decommissioning?)",
+                "Look at linked HO tickets for upstream context",
+            ],
+        },
+        "OTHER": {
+            "label": "OTHER",
+            "color": DIM,
+            "verify_tips": [
+                "Read description + comments \u2014 'OTHER' = automation couldn't classify",
+                "Could be firmware, config change, or multi-symptom",
+                "Check linked tickets for additional context",
+            ],
+            "work_tips": [
+                "Read the description carefully for the actual ask",
+                "Check linked tickets and comments for context",
+                "May need manual triage \u2014 look at node in Grafana",
+            ],
+        },
+        "FAILED_STATE": {
+            "label": "FAILED STATE",
+            "color": RED,
+            "verify_tips": [
+                "Node should be back online and healthy in Grafana",
+                "Check BMC reachability + OS IP",
+                "If HO is still open, the fix may not be final yet",
+            ],
+            "work_tips": [
+                "Check BMC reachability first \u2014 if down, likely POWER_CYCLE or PSU",
+                "If BMC up \u2192 check Grafana for root cause (GPU, NVMe, memory, network)",
+                "If node up but degraded \u2192 likely DEVICE issue",
+                "This ticket will likely convert to DEVICE, POWER_CYCLE, or NETWORK",
+            ],
+        },
+        "COOLING": {
+            "label": "COOLING / CDU",
+            "color": CYAN,
+            "verify_tips": [
+                "CDU issues stay in HO \u2014 DCT assists with physical access only",
+                "Verify coolant levels are back to normal",
+                "Do NOT power cycle nodes on the affected cooling loop",
+            ],
+            "work_tips": [
+                "CDU / cooling \u2014 typically HO-only, not a DO task",
+                "DCT may need to provide physical access or visual inspection",
+                "Do NOT power cycle nodes on the affected cooling loop",
+            ],
+        },
+        "LEAK": {
+            "label": "LEAK",
+            "color": RED,
+            "verify_tips": [
+                "Confirm no active liquid present after cleanup",
+                "Verify affected components are dry and undamaged",
+                "Check neighboring nodes for splash damage",
+            ],
+            "work_tips": [
+                "Pull node from rack ASAP \u2014 safety first",
+                "Check for liquid damage on motherboard, GPU trays, NVMe slots",
+                "Likely full node RMA \u2014 document with photos",
+                "Check if leak source is CDU, cold plate, or fitting",
+            ],
+        },
+        "DRIVE": {
+            "label": "DRIVE / NVMe",
+            "color": MAGENTA,
+            "verify_tips": [
+                "Confirm drive is detected and reporting in OS",
+                "Check Grafana for disk health metrics post-swap",
+                "Verify no SMART errors on the replacement",
+            ],
+            "work_tips": [
+                "NVMe reseat first \u2014 reseat in slot, verify in OS",
+                "If still not reporting \u2192 swap with known-good from parts stock",
+                "RMA the dead drive via HO workflow",
+                "Check for multi-drive failures (could indicate backplane issue)",
+            ],
+        },
+        "GPU_HARDWARE": {
+            "label": "GPU HARDWARE",
+            "color": YELLOW,
+            "verify_tips": [
+                "Confirm GPU is detected and healthy in Grafana post-fix",
+                "Check cold plate sensor readings are normal",
+                "Verify no thermal throttling events",
+            ],
+            "work_tips": [
+                "Cold plate sensor fail = cooling loop issue on GPU tray",
+                "Reseat GPU tray \u2014 check thermal paste / cold plate contact",
+                "If sensor still fails after reseat \u2192 RMA GPU + cold plate assembly",
+                "Check cooling loop for leaks or low flow",
+            ],
+        },
+    }
+
+    cat_info = _CATEGORY_INFO.get(ticket_category, _CATEGORY_INFO["OTHER"])
+
+    def _print_category_badge():
+        """Print the detected category as a colored badge."""
+        c = cat_info["color"]
+        print()
+        print(f"  {c}{BOLD}[{cat_info['label']}]{RESET}")
+        print()
+
+    def _print_category_tips(tip_key: str):
+        """Print category-specific tips (verify_tips or work_tips)."""
+        tips = cat_info.get(tip_key, [])
+        if tips:
+            print(f"  {DIM}{thin}{RESET}")
+            print(f"  {BOLD}{WHITE}Category Tips \u2014 {cat_info['label']}{RESET}")
+            print()
+            for tip in tips:
+                print(f"    {DIM}\u25b8 {tip}{RESET}")
+            print()
+            print(f"  {DIM}{thin}{RESET}")
+            print()
+
     # ── Status-based personalized guidance ────────────────────────────────
     status_lower = status.lower()
 
@@ -3130,6 +3836,7 @@ def _print_sla_detail(ctx: dict):
     if status_lower == "verification" and age_secs > 7 * 86400:
         days = age_secs / 86400
         print(f"  {RED}{BOLD}\u26a0  STALE VERIFICATION{RESET}  {DIM}({days:.0f} days){RESET}")
+        _print_category_badge()
         print()
 
         # Personalized assessment
@@ -3192,12 +3899,14 @@ def _print_sla_detail(ctx: dict):
         print(f"    {CYAN}\u25b8{RESET} Ping the owning engineer/SOE by name if blocked on them")
         print(f"    {DIM}  Don\u2019t just wait \u2014 Slack escalation is expected for old tickets.{RESET}")
         print(f"    {DIM}  Use the stale list (press v from main menu) to export all at once.{RESET}")
+        print()
+        _print_category_tips("verify_tips")
 
     # ·· Verification — past 48h window ····································
     elif status_lower == "verification" and age_secs > 48 * 3600:
         days = age_secs / 86400
         print(f"  {YELLOW}{BOLD}\u25b2  VERIFICATION > 48h{RESET}  {DIM}({days:.1f} days){RESET}")
-        print()
+        _print_category_badge()
         print(f"  {WHITE}{issue_key} is past the standard 24\u201348h observation window.{RESET}")
         print(f"  {WHITE}If your runbook work is done and the node is healthy,{RESET}")
         print(f"  {WHITE}it\u2019s normal and expected for you to close this DO yourself.{RESET}")
@@ -3218,26 +3927,33 @@ def _print_sla_detail(ctx: dict):
         print()
         print(f"    {GREEN}\u25b8{RESET} All good \u2192 Press {GREEN}{BOLD}[k]{RESET} to close")
         print(f"    {YELLOW}\u25b8{RESET} Unsure  \u2192 Press {YELLOW}{BOLD}[z]{RESET} to resume and investigate")
+        print()
+        _print_category_tips("verify_tips")
 
     # ·· Verification — within normal window ·······························
     elif status_lower == "verification":
         print(f"  {GREEN}{BOLD}\u25cf  PENDING VERIFICATION{RESET}")
-        print()
+        _print_category_badge()
         print(f"  {WHITE}{issue_key} is within the 24\u201348h observation window.{RESET}")
         print(f"  {WHITE}You\u2019ve done the runbook. Now confirm the fix is holding:{RESET}")
         print(f"    {DIM}\u25b8 LEDs look good{RESET}")
         print(f"    {DIM}\u25b8 Grafana / IB dashboards are clean{RESET}")
         print(f"    {DIM}\u25b8 No new alerts{RESET}")
         print()
+        _print_category_tips("verify_tips")
         if assignee:
             print(f"  {DIM}Assigned to {assignee}.{RESET}")
+        if created_age and created_age < 4 * 3600:
+            print(f"  {GREEN}\u2605{RESET}  {GREEN}Moving fast \u2014 ticket is under 4 hours old. Keep it up.{RESET}")
+        elif created_age and created_age < 24 * 3600:
+            print(f"  {DIM}\u25b8 Good pace \u2014 same-day verification.{RESET}")
         print(f"  {DIM}Once confirmed healthy \u2192 close the ticket with [k].{RESET}")
         print(f"  {DIM}Don\u2019t let it sit here for weeks \u2014 that\u2019s a smell.{RESET}")
 
     # ·· In Progress — long-running (>24h) ·································
     elif status_lower == "in progress" and age_secs > 24 * 3600:
         print(f"  {YELLOW}{BOLD}\u25b2  LONG RUNNING{RESET}  {DIM}In Progress for {age_str}{RESET}")
-        print()
+        _print_category_badge()
         print(f"  {WHITE}{issue_key} has been In Progress for over 24 hours.{RESET}")
         print()
 
@@ -3259,15 +3975,24 @@ def _print_sla_detail(ctx: dict):
         print()
         print(f"  {BOLD}Still actively working?{RESET}")
         print(f"    {DIM}\u25b8 No action needed \u2014 just be aware the SLA clock is running.{RESET}")
+        print()
+        _print_category_tips("work_tips")
 
     # ·· In Progress — normal ··············································
     elif status_lower == "in progress":
         print(f"  {CYAN}{BOLD}\u25cf  IN PROGRESS{RESET}")
-        print()
+        _print_category_badge()
         if assignee:
             print(f"  {DIM}{issue_key} assigned to {assignee}. SLA clock is running.{RESET}")
         else:
             print(f"  {YELLOW}\u25b8{RESET} {issue_key} is unassigned \u2014 claim with {BOLD}[a]{RESET} first.")
+        print()
+        _print_category_tips("work_tips")
+        if created_age and age_secs:
+            if age_secs < 1800:
+                print(f"  {GREEN}\u2605{RESET}  {GREEN}Jumped on it fast \u2014 started within 30 min. SLA happy.{RESET}")
+            elif age_secs < 2 * 3600:
+                print(f"  {DIM}\u25b8 In progress for {_format_age(age_secs)} \u2014 you\u2019re on it.{RESET}")
         print(f"  {DIM}Complete the runbook work, then:{RESET}")
         print(f"    {GREEN}\u25b8{RESET} {GREEN}{BOLD}[v]{RESET} Verify  {DIM}\u2014 move to Verification for 24\u201348h watch{RESET}")
         print(f"    {YELLOW}\u25b8{RESET} {YELLOW}{BOLD}[y]{RESET} Hold    {DIM}\u2014 if waiting on parts/vendor (pauses clock){RESET}")
@@ -3275,7 +4000,7 @@ def _print_sla_detail(ctx: dict):
     # ·· On Hold / Waiting ·················································
     elif status_lower in ("on hold", "waiting for support"):
         print(f"  {BLUE}{BOLD}\u25a0  PAUSED{RESET}  {DIM}On Hold for {age_str}{RESET}")
-        print()
+        _print_category_badge()
         if assignee:
             print(f"  {DIM}{issue_key} assigned to {assignee}. SLA clock is paused.{RESET}")
         else:
@@ -3301,27 +4026,50 @@ def _print_sla_detail(ctx: dict):
     # ·· New / To Do ·······················································
     elif status_lower in ("to do", "new", "waiting for triage"):
         print(f"  {WHITE}{BOLD}\u25cb  NOT STARTED{RESET}")
-        print()
+        _print_category_badge()
         if assignee:
             print(f"  {DIM}{issue_key} is assigned to {assignee} but hasn\u2019t been started.{RESET}")
         else:
             print(f"  {DIM}{issue_key} is waiting for someone to pick it up.{RESET}")
-        if created_age and created_age > 1800:  # >30 min
+        if created_age and created_age > 4 * 3600:
+            print(f"  {RED}\u25b8{RESET} {RED}Created {created_str} ago \u2014 this is way past the 30 min SLA target.{RESET}")
+            print(f"    {DIM}Grab it now or flag it in your site channel.{RESET}")
+        elif created_age and created_age > 1800:
             print(f"  {YELLOW}\u25b8{RESET} Created {created_str} ago \u2014 SLA target is < 30 min to start.")
         else:
-            print(f"  {DIM}\u25b8 SLA target: start within 30 min of creation.{RESET}")
+            print(f"  {GREEN}\u25b8{RESET} {GREEN}Fresh ticket \u2014 just came in. Grab it before someone else does.{RESET}")
         print(f"    {GREEN}\u25b8{RESET} Press {GREEN}{BOLD}[s]{RESET} to start work {DIM}(auto-assigns to you){RESET}")
+        print()
+        _print_category_tips("work_tips")
 
     # ·· Closed ····························································
     elif status_lower in ("closed", "done", "resolved"):
         print(f"  {GREEN}{BOLD}\u2713  CLOSED{RESET}  {DIM}No action needed{RESET}")
-        print()
+        _print_category_badge()
         print(f"  {DIM}{issue_key}")
         if assignee:
             print(f"  Closed by / last assigned to: {assignee}{RESET}")
         if last_cmt_str:
             print(f"  {DIM}Last comment {last_cmt_str} ago by {last_cmt_author or '?'}{RESET}")
         print(f"  {DIM}If the issue returns, reopen or create a new DO.{RESET}")
+        print()
+        # Timing feedback based on total ticket lifetime
+        if created_age:
+            if created_age < 4 * 3600:
+                print(f"  {GREEN}{BOLD}\u2605{RESET}  {GREEN}Crushed it \u2014 closed in under 4 hours. Fast hands.{RESET}")
+            elif created_age < 24 * 3600:
+                print(f"  {GREEN}\u2605{RESET}  {WHITE}Solid turnaround \u2014 opened and closed same day.{RESET}")
+            elif created_age < 3 * 86400:
+                print(f"  {DIM}\u25b8 Closed within 3 days \u2014 right on track.{RESET}")
+            elif created_age < 7 * 86400:
+                print(f"  {YELLOW}\u25b8{RESET} {DIM}Took about a week. Not bad, but could be tighter.{RESET}")
+            elif created_age < 14 * 86400:
+                print(f"  {YELLOW}\u25b8{RESET} {YELLOW}This one dragged \u2014 {created_age / 86400:.0f} days from open to close.{RESET}")
+                print(f"    {DIM}Next time: if blocked, put it On Hold sooner so it\u2019s visible.{RESET}")
+            else:
+                print(f"  {RED}\u25b8{RESET} {RED}{created_age / 86400:.0f} days to close \u2014 that\u2019s a long time for a DO.{RESET}")
+                print(f"    {DIM}If this was waiting on HO/vendor, On Hold keeps the queue clean.{RESET}")
+                print(f"    {DIM}If it was forgotten, the stale list (v) catches these early.{RESET}")
 
     else:
         print(f"  {DIM}Status: {status}{RESET}")
@@ -4344,6 +5092,8 @@ def _print_action_panel(ctx: dict):
         nav_items.append(btn("=", "Refresh", CYAN))
     nav_items.append(btn("q", "Quit", DIM))
     nav_items.append(btn("?", "Help", CYAN))
+    if _ai_available():
+        nav_items.append(btn("ai", "AI", CYAN))
     print(f"  {DIM}Nav{RESET}  {'   '.join(nav_items)}")
     print()
 
@@ -4454,7 +5204,7 @@ def _manage_bookmarks(state: dict, email: str, token: str) -> dict:
             print()
             return state
 
-        if not action:
+        if action in ("", "b", "back", "m", "menu"):
             return state
 
         # Quick-add a suggestion by number
@@ -4741,16 +5491,20 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             return "menu"
         if choice in ("h", "history") and has_node_id:
             return "history"
-        if choice in ("b", "back", ""):
+        if choice in ("b", "back"):
             return "back"
 
-        # --- Refresh ticket ---
-        if choice == "=" and ctx and ctx.get("source") != "netbox" and email and token:
-            # Uppercase R in panel, but input is lowercased
+        # --- Refresh ticket (Enter or =) ---
+        if choice in ("", "=") and ctx and ctx.get("source") != "netbox" and email and token:
             print(f"\n  {DIM}Refreshing...{RESET}", end="", flush=True)
             _refresh_ctx(ctx, email, token)
             print(f"\r  {GREEN}{BOLD}Refreshed!{RESET}        ")
             _brief_pause()
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
+        if choice == "" and ctx:
+            # Fallback if no refresh possible — just re-render
             _clear_screen()
             _print_pretty(ctx)
             continue
@@ -5240,6 +5994,18 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _print_pretty(ctx)
             continue
 
+        # --- AI Assistant ---
+        if choice == "ai" and ctx:
+            found_key = _ai_dispatch(ctx=ctx, email=email or "", token=token or "")
+            if found_key and JIRA_KEY_PATTERN.match(found_key):
+                # User found a ticket via AI — load it
+                new_ctx = _fetch_and_show(found_key, email, token)
+                if new_ctx:
+                    ctx = new_ctx
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
+
         # Unrecognized input — stay in the detail view, don't exit
         continue
 
@@ -5269,6 +6035,35 @@ def _print_help():
   {BOLD}{CYAN}{'━' * 54}{RESET}
   {BOLD}{WHITE}  Quick Guide — CoreWeave DCT Node Helper{RESET}
   {BOLD}{CYAN}{'━' * 54}{RESET}
+
+  {BOLD}{WHITE}WHAT'S NEW  {RESET}{DIM}v{APP_VERSION}{RESET}
+  {DIM}{'─' * 54}{RESET}
+
+  {BOLD}{YELLOW}v6.3.0{RESET}
+    {GREEN}+{RESET} {WHITE}Ticket categorizer{RESET}
+      {DIM}Scans last 50 queue tickets and groups them by
+      type (DEVICE, NETWORK, POWER_CYCLE, PSU_RESEAT,
+      LOW_LIGHT, PORT_FLAPPING, OTHER) with boolean
+      matching on summary keywords and diag links.
+      Includes troubleshooting tips per category.{RESET}
+
+  {BOLD}{YELLOW}v6.2.0{RESET}
+    {GREEN}+{RESET} {WHITE}SDA queue support{RESET}
+      {DIM}Browse SDA project tickets with Triage and
+      Customer Verification status filters.{RESET}
+    {GREEN}+{RESET} {WHITE}Beginner setup guide{RESET}
+      {DIM}Step-by-step install guide at site/setup-guide.html
+      and live on CodePen.{RESET}
+    {GREEN}+{RESET} {WHITE}start.sh launcher{RESET}
+      {DIM}One-click launcher script for non-tech users.{RESET}
+
+  {BOLD}{YELLOW}v6.1.0{RESET}
+    {GREEN}+{RESET} {WHITE}Rack map visualization{RESET}
+      {DIM}ASCII data hall maps with animated walking routes.{RESET}
+    {GREEN}+{RESET} {WHITE}MRB / Parts search [f]{RESET}
+      {DIM}Find RMA and parts tickets from ticket detail view.{RESET}
+    {GREEN}+{RESET} {WHITE}Bookmark shortcuts [a-e]{RESET}
+      {DIM}Save tickets and queue searches to main menu.{RESET}
 
   {BOLD}{WHITE}MAIN MENU{RESET}
   {DIM}{'─' * 54}{RESET}
@@ -5542,7 +6337,8 @@ def _interactive_menu():
   {BOLD}7{RESET}  Bookmarks         {DIM}(manage saved shortcuts){RESET}
 
   {BOLD}v{RESET}  Stale verifications {DIM}(>48h in Verification){RESET}
-  {BOLD}q{RESET}  Quit              {CYAN}{BOLD}?  Help / Quick Guide{RESET}""")
+  {BOLD}q{RESET}  Quit              {CYAN}{BOLD}?  Help / Quick Guide{RESET}
+  {CYAN}{BOLD}ai{RESET} AI assistant      {DIM}(chat, find tickets, summarize){RESET}""")
 
         # --- Bookmark shortcuts (a-e) ---
         bookmarks = state.get("bookmarks", [])
@@ -5584,8 +6380,8 @@ def _interactive_menu():
             print(f"\n\n  {DIM}Goodbye.{RESET}\n")
             return
 
-        # --- Empty input: re-check for new tickets if watcher is running ---
-        if choice == "" and _is_watcher_running():
+        # --- Empty input: refresh menu (re-check watcher, re-render) ---
+        if choice == "":
             continue
 
         # --- Quit ----------------------------------------------------------
@@ -5593,6 +6389,34 @@ def _interactive_menu():
             _stop_background_watcher()
             print(f"\n  {DIM}Goodbye.{RESET}\n")
             return
+
+        # --- AI Assistant --------------------------------------------------
+        if choice == "ai":
+            found_key = _ai_dispatch(email=email, token=token)
+            if found_key and JIRA_KEY_PATTERN.match(found_key):
+                ctx = _fetch_and_show(found_key, email, token)
+                if ctx:
+                    state = _record_ticket_view(state, ctx["issue_key"], ctx.get("summary", ""),
+                                           assignee=ctx.get("assignee"), updated=ctx.get("updated"))
+                    _save_user_state(state)
+                    _clear_screen()
+                    _print_pretty(ctx)
+                    action = _post_detail_prompt(ctx, email, token, state=state)
+                    if action == "quit":
+                        print(f"\n  {DIM}Goodbye.{RESET}\n")
+                        return
+                    while action == "history":
+                        tag = ctx.get("service_tag") or ctx.get("hostname")
+                        if not tag:
+                            break
+                        h_action = _run_history_interactive(email, token, tag)
+                        if h_action == "quit":
+                            print(f"\n  {DIM}Goodbye.{RESET}\n")
+                            return
+                        _clear_screen()
+                        _print_pretty(ctx)
+                        action = _post_detail_prompt(ctx, email, token, state=state)
+            continue
 
         # --- 0: Return to last ticket ------------------------------------
         if choice == "0" and state.get("last_ticket"):
