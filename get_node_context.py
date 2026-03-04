@@ -142,9 +142,10 @@ TRANSITION_MAP = {
 }
 
 # ---------------------------------------------------------------------------
-# AI Assistant (OpenAI) — optional
+# AI Assistant — supports OpenAI, Ollama, Groq, or any OpenAI-compatible API
 # ---------------------------------------------------------------------------
-AI_MODEL = "gpt-4o"
+AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o")
+AI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").strip() or None
 AI_MAX_TOKENS = 1024
 AI_TEMPERATURE = 0.3
 
@@ -251,7 +252,9 @@ AI_SYSTEM_PROMPT_TICKET = (
     "- Use plain English, no jargon unless the ticket uses it.\n"
     "- When summarizing, lead with: what the issue is, what has been done, what the likely next step is.\n"
     "- When troubleshooting, reference specific fields from the ticket context.\n"
-    "- If you don't know something, say so. Never invent ticket data."
+    "- If you don't know something, say so. Never invent ticket data.\n"
+    "- FORMATTING: This is a terminal. NEVER use markdown (no **, no ##, no ```, no bullet dots). "
+    "Use plain text only. Use dashes (-) for lists, ALL CAPS for emphasis, and indentation for structure."
     + _AI_DOMAIN_KNOWLEDGE
 )
 
@@ -260,14 +263,16 @@ AI_SYSTEM_PROMPT_FINDER = (
     "The user will describe what they remember about a ticket. Your job is to:\n"
     "1. Extract search keywords from their description.\n"
     "2. After seeing search results, rank them by relevance and explain why each might be the one.\n"
-    "Be concise. Format output for a terminal (no markdown headers, use plain text)."
+    "Be concise. NEVER use markdown (no **, no ##, no ```). Plain text only, dashes for lists, ALL CAPS for emphasis."
     + _AI_DOMAIN_KNOWLEDGE
 )
 
 AI_SYSTEM_PROMPT_CHAT = (
     "You are a helpful assistant for data center technicians at CoreWeave. "
     "You have access to the current ticket context if provided. Answer questions naturally. "
-    "Be concise — this is a terminal interface. No markdown formatting."
+    "Be concise — this is a terminal interface. "
+    "FORMATTING: NEVER use markdown (no **, no ##, no ```, no bullet dots). "
+    "Use plain text only. Use dashes (-) for lists, ALL CAPS for emphasis, and indentation for structure."
     + _AI_DOMAIN_KNOWLEDGE
 )
 
@@ -2062,8 +2067,13 @@ def _build_context(identifier: str, issue: dict,
 # ---------------------------------------------------------------------------
 
 def _ai_available() -> bool:
-    """Return True if OpenAI is configured and importable."""
-    return _HAS_OPENAI and bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    """Return True if an OpenAI-compatible API is configured and importable."""
+    if not _HAS_OPENAI:
+        return False
+    # Local providers (Ollama) don't need a real API key
+    if AI_BASE_URL:
+        return True
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
 
 def _build_ai_context(ctx: dict) -> str:
@@ -2221,12 +2231,15 @@ def _ai_chat(messages: list, temperature: float = AI_TEMPERATURE,
     if not _HAS_OPENAI:
         return f"{YELLOW}AI not available. Install: pip install openai{RESET}"
 
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip() or "ollama"
+    if not AI_BASE_URL and api_key == "ollama":
         return f"{YELLOW}AI not available. Set OPENAI_API_KEY in .env{RESET}"
 
     try:
-        client = _openai_mod.OpenAI(api_key=api_key)
+        client_kwargs = {"api_key": api_key}
+        if AI_BASE_URL:
+            client_kwargs["base_url"] = AI_BASE_URL
+        client = _openai_mod.OpenAI(**client_kwargs)
         response = client.chat.completions.create(
             model=AI_MODEL,
             messages=messages,
