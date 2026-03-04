@@ -207,6 +207,9 @@ _JQL_CACHE_MAX = 200
 # Animation toggle (set CWHELPER_ANIMATE=0 to disable)
 _ANIMATE = os.environ.get("CWHELPER_ANIMATE", "1") != "0"
 
+# AI toggle — on by default if configured, user can toggle with "ai off"/"ai on"
+_AI_ENABLED = True
+
 # IB topology lookup (loaded from ib_topology.json once)
 _IB_TOPO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ib_topology.json")
 _ib_topo: dict | None = None
@@ -2043,12 +2046,15 @@ def _ai_chat(messages: list, temperature: float = AI_TEMPERATURE,
     except Exception as e:
         err_type = type(e).__name__
         if "AuthenticationError" in err_type:
-            return f"{YELLOW}AI Error: Invalid API key. Check OPENAI_API_KEY in .env{RESET}"
-        if "RateLimitError" in err_type:
-            return f"{YELLOW}AI Error: Rate limited. Wait a moment and try again.{RESET}"
-        if "APIConnectionError" in err_type:
-            return f"{YELLOW}AI Error: Could not connect to OpenAI. Check internet.{RESET}"
-        return f"{YELLOW}AI Error: {e}{RESET}"
+            msg = f"\n  {YELLOW}AI Error: Invalid API key. Check OPENAI_API_KEY in .env{RESET}"
+        elif "RateLimitError" in err_type:
+            msg = f"\n  {YELLOW}AI Error: Rate limited. Wait a moment and try again.{RESET}"
+        elif "APIConnectionError" in err_type:
+            msg = f"\n  {YELLOW}AI Error: Could not connect to OpenAI. Check internet.{RESET}"
+        else:
+            msg = f"\n  {YELLOW}AI Error: {e}{RESET}"
+        print(msg)
+        return ""
 
 
 def _ai_summarize(ctx: dict) -> str:
@@ -2140,12 +2146,17 @@ def _ai_find_ticket(user_description: str, email: str, token: str) -> str | None
     return None
 
 
-def _ai_chat_loop(ctx: dict = None, queue_info: str = ""):
-    """Run an interactive AI chat session.
+def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
+                   email: str = "", token: str = "",
+                   initial_msg: str = ""):
+    """Run an interactive AI chat session. Goes straight into chat.
 
     If ctx is provided, ticket context is included.
     If queue_info is provided, queue listing is included as context.
+    If initial_msg is provided, sends it immediately as first message.
+    Supports in-chat ticket lookup: type a ticket key like DO-12345 to load it.
     Exit: 'back', 'quit', 'q', 'exit', or empty Enter.
+    Returns a ticket key string if user wants to load one, else None.
     """
     # Build system message
     if ctx:
@@ -2161,15 +2172,31 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = ""):
         context_text = ""
         label = "general"
 
-    messages = [{"role": "system", "content": system}]
+    # Add ticket lookup awareness to system prompt
+    enhanced_system = system + (
+        "\n\nYou can help find tickets. If the user describes a ticket they're looking for, "
+        "suggest they type 'find' followed by keywords, or type a ticket key like DO-12345 to load it directly."
+    )
+
+    messages = [{"role": "system", "content": enhanced_system}]
     if context_text:
         messages.append({"role": "user", "content": f"Here is my current context:\n\n{context_text}"})
         messages.append({"role": "assistant", "content": "Got it. I can see the context. What would you like to know?"})
 
     print(f"\n  {CYAN}{BOLD}{'─' * 40}{RESET}")
     print(f"  {CYAN}{BOLD}AI Chat{RESET} {DIM}— {label}{RESET}")
-    print(f"  {DIM}Type 'back' to exit, 'clear' to reset{RESET}")
+    print(f"  {DIM}Type 'back' to exit  |  'find <desc>' to search tickets{RESET}")
     print(f"  {CYAN}{BOLD}{'─' * 40}{RESET}")
+
+    found_key = None
+
+    # Handle initial message (from unrecognized menu input)
+    if initial_msg:
+        print(f"\n  {GREEN}You:{RESET} {initial_msg}")
+        messages.append({"role": "user", "content": initial_msg})
+        response = _ai_chat(messages)
+        if response:
+            messages.append({"role": "assistant", "content": response})
 
     while True:
         try:
@@ -2177,11 +2204,27 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = ""):
         except (EOFError, KeyboardInterrupt):
             break
 
-        if not user_input or user_input.lower() in ("back", "quit", "q", "exit"):
+        if not user_input or user_input.lower() in ("back", "quit", "q", "exit", "b"):
             break
 
+        # Direct ticket key — return it for the caller to load
+        if JIRA_KEY_PATTERN.match(user_input.upper()):
+            found_key = user_input.upper()
+            print(f"\n  {GREEN}Loading {found_key}...{RESET}")
+            break
+
+        # "find <description>" — search for a ticket
+        if user_input.lower().startswith("find ") and email and token:
+            desc = user_input[5:].strip()
+            if desc:
+                fk = _ai_find_ticket(desc, email, token)
+                if fk:
+                    found_key = fk
+                    break
+            continue
+
         if user_input.lower() == "clear":
-            messages = [{"role": "system", "content": system}]
+            messages = [{"role": "system", "content": enhanced_system}]
             if context_text:
                 messages.append({"role": "user", "content": f"Here is my current context:\n\n{context_text}"})
                 messages.append({"role": "assistant", "content": "Context reloaded. What would you like to know?"})
@@ -2199,20 +2242,22 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = ""):
 
         # Cap history at 20 messages (keep system + context)
         while len(messages) > 22:
-            # Remove oldest user/assistant pair after the system+context messages
             start_idx = 3 if context_text else 1
             if len(messages) > start_idx + 2:
                 del messages[start_idx]
                 del messages[start_idx]
 
     print(f"\n  {DIM}Chat ended.{RESET}")
+    return found_key
 
 
 def _ai_dispatch(ctx: dict = None, email: str = "", token: str = "",
-                 queue_info: str = ""):
-    """Universal AI entry point — called from any prompt in the app.
+                 queue_info: str = "", initial_msg: str = ""):
+    """Universal AI entry point — goes straight into chat.
 
-    Shows a submenu based on available context, then dispatches.
+    If initial_msg is provided, sends it as the first message (for
+    unrecognized main menu input routed to AI).
+    Returns a ticket key if the user finds one via AI, else None.
     """
     if not _ai_available():
         print(f"\n  {YELLOW}AI not available.{RESET}", end="")
@@ -2221,59 +2266,12 @@ def _ai_dispatch(ctx: dict = None, email: str = "", token: str = "",
         else:
             print(f" Set {WHITE}OPENAI_API_KEY{RESET} in your .env file")
         _brief_pause(1.5)
-        return
+        return None
 
-    print(f"\n  {CYAN}{BOLD}AI Assistant{RESET}")
-    print(f"  {DIM}{'─' * 40}{RESET}")
-
-    options = []
-    if ctx:
-        options.append(("1", "Summarize this ticket"))
-        options.append(("2", "Ask about this ticket"))
-    if ctx or queue_info:
-        options.append(("3", "Free chat (with context)"))
-    else:
-        options.append(("3", "Free chat"))
-    options.append(("4", "Find a ticket (describe what you remember)"))
-    options.append(("b", "Back"))
-
-    for key, label in options:
-        if key == "b":
-            print(f"  {DIM}{key}{RESET}  {label}")
-        else:
-            print(f"  {BOLD}{key}{RESET}  {label}")
-    print()
-
-    try:
-        choice = input("  > ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return
-
-    if choice == "1" and ctx:
-        _ai_summarize(ctx)
-        print()
-        input(f"  {DIM}Press ENTER to continue...{RESET}")
-    elif choice == "2" and ctx:
-        _ai_chat_loop(ctx=ctx)
-    elif choice == "3":
-        _ai_chat_loop(ctx=ctx, queue_info=queue_info)
-    elif choice == "4":
-        print(f"\n  {DIM}Describe the ticket you're looking for:{RESET}")
-        try:
-            desc = input(f"  {GREEN}You:{RESET} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            desc = ""
-        if desc and email and token:
-            found_key = _ai_find_ticket(desc, email, token)
-            if found_key:
-                print(f"\n  {GREEN}Found: {WHITE}{BOLD}{found_key}{RESET}")
-                print(f"  {DIM}Returning to load this ticket...{RESET}")
-                _brief_pause(1)
-                # Store for caller to pick up
-                return found_key
-        elif desc:
-            print(f"  {YELLOW}Need Jira credentials to search.{RESET}")
-    return None
+    found_key = _ai_chat_loop(ctx=ctx, queue_info=queue_info,
+                               email=email, token=token,
+                               initial_msg=initial_msg)
+    return found_key
 
 
 # ---------------------------------------------------------------------------
@@ -6235,6 +6233,7 @@ def _ask_queue_filters(prompt_site: bool = True, project: str = "DO") -> dict | 
 
 def _interactive_menu():
     """Main interactive loop. Keeps running until user quits."""
+    global _AI_ENABLED
     email, token = _get_credentials()
 
     # Pre-warm user identity in background (for greeting + "my tickets")
@@ -6337,8 +6336,9 @@ def _interactive_menu():
   {BOLD}7{RESET}  Bookmarks         {DIM}(manage saved shortcuts){RESET}
 
   {BOLD}v{RESET}  Stale verifications {DIM}(>48h in Verification){RESET}
-  {BOLD}q{RESET}  Quit              {CYAN}{BOLD}?  Help / Quick Guide{RESET}
-  {CYAN}{BOLD}ai{RESET} AI assistant      {DIM}(chat, find tickets, summarize){RESET}""")
+  {BOLD}q{RESET}  Quit              {CYAN}{BOLD}?{RESET}  Help / Quick Guide"""
+        + (f"\n  {CYAN}{BOLD}ai{RESET} {'on' if _AI_ENABLED else 'off'}               {DIM}(type anything to chat — 'ai off' to disable){RESET}" if _ai_available() else "")
+        )
 
         # --- Bookmark shortcuts (a-e) ---
         bookmarks = state.get("bookmarks", [])
@@ -6390,7 +6390,18 @@ def _interactive_menu():
             print(f"\n  {DIM}Goodbye.{RESET}\n")
             return
 
-        # --- AI Assistant --------------------------------------------------
+        # --- AI toggle -----------------------------------------------------
+        if choice == "ai on":
+            _AI_ENABLED = True
+            print(f"\n  {GREEN}AI enabled.{RESET} {DIM}Unrecognized input will go to AI chat.{RESET}")
+            _brief_pause(1)
+            continue
+        if choice == "ai off":
+            _AI_ENABLED = False
+            print(f"\n  {YELLOW}AI disabled.{RESET}")
+            _brief_pause(1)
+            continue
+        # --- AI chat (explicit) --------------------------------------------
         if choice == "ai":
             found_key = _ai_dispatch(email=email, token=token)
             if found_key and JIRA_KEY_PATTERN.match(found_key):
@@ -6897,7 +6908,34 @@ def _interactive_menu():
             _clear_screen()
 
         else:
-            print(f"\n  {DIM}Invalid choice. Try 1-7, v, ?, or q.{RESET}")
+            # AI default-on: route unrecognized input to AI chat
+            if _AI_ENABLED and _ai_available() and len(choice) > 1:
+                found_key = _ai_dispatch(email=email, token=token, initial_msg=choice)
+                if found_key and JIRA_KEY_PATTERN.match(found_key):
+                    ctx = _fetch_and_show(found_key, email, token)
+                    if ctx:
+                        state = _record_ticket_view(state, ctx["issue_key"], ctx.get("summary", ""),
+                                               assignee=ctx.get("assignee"), updated=ctx.get("updated"))
+                        _save_user_state(state)
+                        _clear_screen()
+                        _print_pretty(ctx)
+                        action = _post_detail_prompt(ctx, email, token, state=state)
+                        if action == "quit":
+                            print(f"\n  {DIM}Goodbye.{RESET}\n")
+                            return
+                        while action == "history":
+                            tag = ctx.get("service_tag") or ctx.get("hostname")
+                            if not tag:
+                                break
+                            h_action = _run_history_interactive(email, token, tag)
+                            if h_action == "quit":
+                                print(f"\n  {DIM}Goodbye.{RESET}\n")
+                                return
+                            _clear_screen()
+                            _print_pretty(ctx)
+                            action = _post_detail_prompt(ctx, email, token, state=state)
+            else:
+                print(f"\n  {DIM}Invalid choice. Try 1-7, v, ?, or q.{RESET}")
 
 
 # ---------------------------------------------------------------------------
