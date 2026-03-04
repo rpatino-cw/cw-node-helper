@@ -27,3 +27,4 @@ source/
 *.swo
 *~
 .DS_Store
+.claude/
