@@ -723,6 +723,7 @@ def _refresh_ctx(ctx: dict, email: str, token: str):
     key = ctx["issue_key"]
     identifier = ctx.get("identifier", key)
     _issue_cache.pop(key, None)
+    _jql_cache.clear()  # Clear JQL cache so queue/history refreshes show updated statuses
 
     issue = _jira_get_issue(key, email, token)
     new_ctx = _build_context(identifier, issue, email, token)
