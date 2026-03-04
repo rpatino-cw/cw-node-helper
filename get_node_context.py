@@ -2247,12 +2247,18 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
     # Add ticket lookup awareness to system prompt
     enhanced_system = system + (
         "\n\nYou have access to the user's recent tickets, bookmarks, and last viewed ticket. "
-        "IMPORTANT: When the user wants to open, load, or go to a ticket, you MUST respond with "
-        "EXACTLY this format on its own line: [LOAD:DO-12345] (replacing DO-12345 with the actual key). "
-        "This triggers the app to open the ticket automatically. "
-        "Examples: if they say 'open my last ticket' and the last viewed is DO-90226, respond with [LOAD:DO-90226]. "
-        "If they say 'open it' after discussing a ticket, respond with [LOAD:<that ticket key>]. "
-        "You can also help find tickets — suggest they type 'find' followed by keywords."
+        "IMPORTANT COMMANDS you can embed in your responses:\n"
+        "- [LOAD:DO-12345] — opens a ticket. Use when the user wants to open/load/go to a ticket you know the key of.\n"
+        "- [SEARCH:keywords here] — searches Jira. Use when the user wants to find tickets, filter, or look something up.\n\n"
+        "CRITICAL BEHAVIOR:\n"
+        "- When the user asks to find, search, filter, or open tickets by person/description/keyword, "
+        "DO NOT tell them to retype anything. Instead, embed [SEARCH:their keywords] in your response and "
+        "the app will automatically search for them.\n"
+        "- Examples: 'can you open joshua tapia tickets' → respond with 'Searching for Joshua Tapia's tickets... [SEARCH:joshua tapia]'\n"
+        "- 'find power cycle tickets' → respond with 'Looking for power cycle tickets... [SEARCH:power cycle]'\n"
+        "- 'open my last ticket' → respond with [LOAD:DO-90226] (using the actual key from context)\n"
+        "- When the user says 'yes' or confirms after you suggest something, DO IT — don't ask again.\n"
+        "- Be proactive. If you can figure out what they want, just do it."
     )
 
     messages = [{"role": "system", "content": enhanced_system}]
@@ -2279,6 +2285,12 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
                 found_key = load_match.group(1)
                 print(f"\n  {GREEN}Opening {found_key}...{RESET}")
                 return found_key
+            search_match = re.search(r'\[SEARCH:([^\]]+)\]', response)
+            if search_match and email and token:
+                search_terms = search_match.group(1).strip()
+                fk = _ai_find_ticket(search_terms, email, token)
+                if fk:
+                    return fk
 
     while True:
         try:
@@ -2328,6 +2340,15 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
                 found_key = load_match.group(1)
                 print(f"\n  {GREEN}Opening {found_key}...{RESET}")
                 break
+
+            # Check if AI wants to search via [SEARCH:keywords]
+            search_match = re.search(r'\[SEARCH:([^\]]+)\]', response)
+            if search_match and email and token:
+                search_terms = search_match.group(1).strip()
+                fk = _ai_find_ticket(search_terms, email, token)
+                if fk:
+                    found_key = fk
+                    break
 
         # Cap history at 20 messages (keep system + context)
         while len(messages) > 22:
