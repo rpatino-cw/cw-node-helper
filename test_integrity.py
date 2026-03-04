@@ -84,8 +84,8 @@ class TestActionPanelButtons(unittest.TestCase):
 
     def test_minimal_ctx_shows_basic_buttons(self):
         out = _capture_panel(_base_ticket_ctx())
-        self._has(out, "a", "j", "b", "m", "q", "u")  # [u] SLA always shows for tickets
-        self._lacks(out, "r", "n", "w", "l", "d", "c", "e", "f")
+        self._has(out, "a", "j", "b", "m", "q", "u", "c")  # [c] always shows, [u] SLA always shows
+        self._lacks(out, "r", "n", "w", "l", "d", "e", "f")
 
     def test_full_ctx_shows_all_view_buttons(self):
         ctx = _base_ticket_ctx(
@@ -724,6 +724,302 @@ class TestConfigIntegrity(unittest.TestCase):
         self.assertFalse(gnc.JIRA_KEY_PATTERN.match("do-123"))   # lowercase
         self.assertFalse(gnc.JIRA_KEY_PATTERN.match("12345"))    # no project
         self.assertFalse(gnc.JIRA_KEY_PATTERN.match("DO-"))      # no number
+
+
+# ===========================================================================
+# ntfy.sh push notifications
+# ===========================================================================
+
+class TestNtfySend(unittest.TestCase):
+    """Tests for _ntfy_send() — ntfy.sh push notification function."""
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_sends_notification(self):
+        mock_post = MagicMock()
+        with patch("requests.post", mock_post):
+            gnc._ntfy_send("Test Title", "Test message", priority="high", tags="warning")
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://ntfy.sh/test-topic")
+        self.assertEqual(kwargs["data"], b"Test message")
+        self.assertEqual(kwargs["headers"]["Title"], "Test Title")
+        self.assertEqual(kwargs["headers"]["Priority"], "high")
+        self.assertEqual(kwargs["headers"]["Tags"], "warning")
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_omits_tags_header_when_empty(self):
+        mock_post = MagicMock()
+        with patch("requests.post", mock_post):
+            gnc._ntfy_send("Title", "msg")
+        headers = mock_post.call_args[1]["headers"]
+        self.assertNotIn("Tags", headers)
+
+    @patch.object(gnc, "NTFY_TOPIC", "")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_noop_when_no_topic(self):
+        mock_post = MagicMock()
+        with patch("requests.post", mock_post):
+            gnc._ntfy_send("Title", "msg")
+        mock_post.assert_not_called()
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", False)
+    def test_noop_when_disabled(self):
+        mock_post = MagicMock()
+        with patch("requests.post", mock_post):
+            gnc._ntfy_send("Title", "msg")
+        mock_post.assert_not_called()
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_silent_on_network_error(self):
+        mock_post = MagicMock(side_effect=Exception("Connection refused"))
+        with patch("requests.post", mock_post):
+            gnc._ntfy_send("Title", "msg")  # should not raise
+
+
+class TestStaleUnassigned(unittest.TestCase):
+    """Tests for _check_stale_unassigned()."""
+
+    def setUp(self):
+        gnc._ntfy_alerted.clear()
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_alerts_on_stale_unassigned(self):
+        import time, datetime as dt
+        old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        issues = [{"key": "DO-100", "fields": {"assignee": None, "created": old_time}}]
+        with patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_stale_unassigned(issues, "LAS1")
+        mock_send.assert_called_once()
+        self.assertIn("DO-100", mock_send.call_args[0][1])
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_skips_assigned_tickets(self):
+        import datetime as dt
+        old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        issues = [{"key": "DO-100", "fields": {"assignee": {"displayName": "Alice"}, "created": old_time}}]
+        with patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_stale_unassigned(issues, "LAS1")
+        mock_send.assert_not_called()
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_no_duplicate_alerts(self):
+        import datetime as dt
+        old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        issues = [{"key": "DO-100", "fields": {"assignee": None, "created": old_time}}]
+        with patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_stale_unassigned(issues, "LAS1")
+            gnc._check_stale_unassigned(issues, "LAS1")  # second call
+        mock_send.assert_called_once()  # only alerted once
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_skips_recent_tickets(self):
+        import datetime as dt
+        recent = dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        issues = [{"key": "DO-100", "fields": {"assignee": None, "created": recent}}]
+        with patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_stale_unassigned(issues, "LAS1")
+        mock_send.assert_not_called()
+
+
+class TestSLAWarnings(unittest.TestCase):
+    """Tests for _check_sla_warnings()."""
+
+    def setUp(self):
+        gnc._ntfy_alerted.clear()
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_alerts_on_sla_breach(self):
+        issues = [{"key": "DO-200", "fields": {
+            "assignee": {"emailAddress": "me@test.com"}}}]
+        sla_data = [{"name": "Time to Resolution", "ongoingCycle": {
+            "breached": True, "remainingTime": {"millis": -1000, "friendly": "-1h"}}}]
+        with patch.object(gnc, "_fetch_sla", return_value=sla_data), \
+             patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_sla_warnings(issues, "me@test.com", "tok")
+        mock_send.assert_called_once()
+        self.assertIn("breached", mock_send.call_args[0][1].lower())
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_alerts_on_low_remaining(self):
+        issues = [{"key": "DO-200", "fields": {
+            "assignee": {"emailAddress": "me@test.com"}}}]
+        sla_data = [{"name": "Time to Resolution", "ongoingCycle": {
+            "breached": False, "remainingTime": {"millis": 1800000, "friendly": "30m"}}}]
+        with patch.object(gnc, "_fetch_sla", return_value=sla_data), \
+             patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_sla_warnings(issues, "me@test.com", "tok")
+        mock_send.assert_called_once()
+        self.assertIn("30m", mock_send.call_args[0][1])
+
+    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_skips_other_peoples_tickets(self):
+        issues = [{"key": "DO-200", "fields": {
+            "assignee": {"emailAddress": "other@test.com"}}}]
+        with patch.object(gnc, "_fetch_sla") as mock_sla, \
+             patch.object(gnc, "_ntfy_send") as mock_send:
+            gnc._check_sla_warnings(issues, "me@test.com", "tok")
+        mock_sla.assert_not_called()
+        mock_send.assert_not_called()
+
+    @patch.object(gnc, "NTFY_TOPIC", "")
+    @patch.object(gnc, "_NTFY_ENABLED", True)
+    def test_noop_when_no_topic(self):
+        issues = [{"key": "DO-200", "fields": {
+            "assignee": {"emailAddress": "me@test.com"}}}]
+        with patch.object(gnc, "_fetch_sla") as mock_sla:
+            gnc._check_sla_warnings(issues, "me@test.com", "tok")
+        mock_sla.assert_not_called()
+
+
+# ===========================================================================
+# Walkthrough mode
+# ===========================================================================
+
+class TestWalkthroughMode(unittest.TestCase):
+    """Tests for walkthrough mode functions."""
+
+    def test_annotate_device_returns_correct_structure(self):
+        devices = [
+            {"position": 34, "name": "node-01", "display": "node-01",
+             "status": {"label": "Active"},
+             "device_role": {"name": "GPU Server"}},
+        ]
+        with patch("builtins.input", side_effect=["1", "LED blinking amber"]):
+            result = gnc._walkthrough_annotate_device(devices, "R064")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["rack"], "R064")
+        self.assertEqual(result["ru"], 34)
+        self.assertEqual(result["device_name"], "node-01")
+        self.assertEqual(result["status"], "Active")
+        self.assertEqual(result["note"], "LED blinking amber")
+        self.assertIn("timestamp", result)
+
+    def test_annotate_device_skip_on_enter(self):
+        devices = [
+            {"position": 34, "name": "node-01", "display": "node-01",
+             "status": {"label": "Active"},
+             "device_role": {"name": "GPU Server"}},
+        ]
+        with patch("builtins.input", return_value=""):
+            result = gnc._walkthrough_annotate_device(devices, "R064")
+        self.assertIsNone(result)
+
+    def test_annotate_device_no_racked_devices(self):
+        devices = [{"name": "unracked-thing"}]  # no position
+        result = gnc._walkthrough_annotate_device(devices, "R064")
+        self.assertIsNone(result)
+
+    def test_save_notes_persists_to_state(self):
+        state = {"walkthrough_notes": [], "walkthrough_session": None}
+        notes = [{"rack": "R064", "ru": 34, "device_name": "node-01",
+                  "status": "Active", "note": "test", "timestamp": "2026-01-01T00:00:00Z"}]
+        session = {"site_code": "US-CENTRAL-07A", "dh": "DH1", "started_at": "2026-01-01T00:00:00Z"}
+        with patch.object(gnc, "_save_user_state"):
+            gnc._walkthrough_save_notes(state, notes, session)
+        self.assertEqual(state["walkthrough_notes"], notes)
+        self.assertEqual(state["walkthrough_session"], session)
+
+    def test_export_csv_fallback(self):
+        notes = [{"rack": "R064", "ru": 34, "device_name": "node-01",
+                  "status": "Active", "note": "test note", "timestamp": "2026-01-01T00:00:00Z"}]
+        # Force CSV fallback by making openpyxl import fail
+        import sys
+        original = sys.modules.get("openpyxl")
+        sys.modules["openpyxl"] = None  # force ImportError on import
+        try:
+            filename = gnc._walkthrough_export(notes, "US-TEST", "DH1")
+            self.assertTrue(filename.endswith(".csv"))
+            import os
+            self.assertTrue(os.path.exists(filename))
+            with open(filename) as f:
+                content = f.read()
+            self.assertIn("Rack,RU,Device,Status,Note,Timestamp", content)
+            self.assertIn("test note", content)
+            os.remove(filename)
+        finally:
+            if original is not None:
+                sys.modules["openpyxl"] = original
+            else:
+                sys.modules.pop("openpyxl", None)
+
+    def test_resume_prompt_no_session(self):
+        state = {"walkthrough_session": None, "walkthrough_notes": []}
+        notes, session = gnc._walkthrough_resume_prompt(state)
+        self.assertEqual(notes, [])
+        self.assertIsNone(session)
+
+    def test_resume_prompt_with_session(self):
+        existing_notes = [{"rack": "R064", "note": "old note"}]
+        existing_session = {"site_code": "US-TEST", "dh": "DH1", "started_at": "2026-01-01T00:00:00Z"}
+        state = {"walkthrough_session": existing_session, "walkthrough_notes": existing_notes}
+        with patch("builtins.input", return_value="y"):
+            notes, session = gnc._walkthrough_resume_prompt(state)
+        self.assertEqual(notes, existing_notes)
+        self.assertEqual(session, existing_session)
+
+    def test_pick_site_dh_valid(self):
+        with patch("builtins.input", side_effect=["1", "DH1"]):
+            result = gnc._walkthrough_pick_site_dh()
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], gnc.KNOWN_SITES[0])
+        self.assertEqual(result[1], "DH1")
+
+    def test_pick_site_dh_cancel(self):
+        with patch("builtins.input", return_value=""):
+            result = gnc._walkthrough_pick_site_dh()
+        self.assertIsNone(result)
+
+
+class TestExtractPsuInfo(unittest.TestCase):
+    """Tests for _extract_psu_info — PSU detail parsing from description text."""
+
+    SAMPLE_DESC = (
+        "The PSU with id 3 at dh1-r306-node-04-us-central-07a has failed or is unseated.\n"
+        "Identify the PSU with id 3 at deviceslot dh1-r306-node-04-us-central-07a, "
+        "serial S948338X5830183, rack unit 22, row 31."
+    )
+
+    def test_psu_id_extracted(self):
+        info = gnc._extract_psu_info(self.SAMPLE_DESC)
+        self.assertIsNotNone(info)
+        self.assertEqual(info["psu_id"], "3")
+
+    def test_deviceslot_extracted(self):
+        info = gnc._extract_psu_info(self.SAMPLE_DESC)
+        self.assertEqual(info["deviceslot"], "dh1-r306-node-04-us-central-07a")
+
+    def test_serial_extracted(self):
+        info = gnc._extract_psu_info(self.SAMPLE_DESC)
+        self.assertEqual(info["serial"], "S948338X5830183")
+
+    def test_rack_unit_and_row(self):
+        info = gnc._extract_psu_info(self.SAMPLE_DESC)
+        self.assertEqual(info["rack_unit"], "22")
+        self.assertEqual(info["row"], "31")
+
+    def test_no_psu_returns_none(self):
+        info = gnc._extract_psu_info("Reseat the NIC in slot 2")
+        self.assertIsNone(info)
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(gnc._extract_psu_info(""))
+        self.assertIsNone(gnc._extract_psu_info(None))
+
+    def test_multiple_psu_ids(self):
+        desc = "PSU with id 1 failed. PSU with id 3 also failed."
+        info = gnc._extract_psu_info(desc)
+        self.assertEqual(info["all_psu_ids"], ["1", "3"])
 
 
 # ===========================================================================

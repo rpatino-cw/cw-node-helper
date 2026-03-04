@@ -85,7 +85,7 @@ ISSUE_DETAIL_FIELDS = [
     "customfield_10207", "customfield_10193", "customfield_10192",
     "customfield_10194", "customfield_10191", "customfield_10210",
     "customfield_10010", "description", "comment", "issuelinks",
-    "created", "updated", "statuscategorychangedate",
+    "created", "updated", "statuscategorychangedate", "attachment",
 ]
 
 # Known site strings (from Jira cf[10194] values seen in real tickets).
@@ -1287,6 +1287,57 @@ def _extract_description_details(fields: dict) -> dict:
     }
 
 
+def _extract_psu_info(description: str) -> dict | None:
+    """Parse PSU-specific fields from ticket description text.
+
+    Returns a dict with psu_id, deviceslot, serial, rack_unit, row
+    or None if no PSU info found.
+    """
+    if not description:
+        return None
+    desc_low = description.lower()
+    if "psu" not in desc_low and "power supply" not in desc_low:
+        return None
+
+    info = {}
+
+    # PSU ID: "PSU with id 3", "PSU id 3", "PSU #3", "PSU 3"
+    m = re.search(r'psu\s+(?:with\s+)?id\s+(\d+)', description, re.IGNORECASE)
+    if not m:
+        m = re.search(r'psu\s*#?\s*(\d+)', description, re.IGNORECASE)
+    if m:
+        info["psu_id"] = m.group(1)
+
+    # Deviceslot: "at deviceslot dh1-r306-node-04-us-central-07a"
+    m = re.search(r'(?:deviceslot|at)\s+(dh\d*-r\d+-node-\d+-[\w-]+)', description, re.IGNORECASE)
+    if m:
+        info["deviceslot"] = m.group(1)
+
+    # Serial: "serial S948338X5830183"
+    m = re.search(r'serial\s+(\S+)', description, re.IGNORECASE)
+    if m:
+        info["serial"] = m.group(1).rstrip(",.")
+
+    # Rack unit: "rack unit 22"
+    m = re.search(r'rack\s+unit\s+(\d+)', description, re.IGNORECASE)
+    if m:
+        info["rack_unit"] = m.group(1)
+
+    # Row: "row 31"
+    m = re.search(r'\brow\s+(\d+)', description, re.IGNORECASE)
+    if m:
+        info["row"] = m.group(1)
+
+    # Count how many PSUs are mentioned (multiple failures)
+    psu_ids = re.findall(r'psu\s+(?:with\s+)?id\s+(\d+)', description, re.IGNORECASE)
+    if not psu_ids:
+        psu_ids = re.findall(r'psu\s*#?\s*(\d+)', description, re.IGNORECASE)
+    if psu_ids:
+        info["all_psu_ids"] = sorted(set(psu_ids))
+
+    return info if info else None
+
+
 def _extract_comments(fields: dict, max_comments: int = 3) -> list:
     """Pull the most recent comments from fields.comment.comments.
 
@@ -2040,6 +2091,15 @@ def _build_context(identifier: str, issue: dict,
         "comments": [],
         "_raw_comments": raw_comments,
         "_comment_count": comment_count,
+        # Attachments
+        "attachments": [
+            {"filename": a.get("filename", "?"),
+             "size": a.get("size", 0),
+             "author": (a.get("author", {}) or {}).get("displayName", "?"),
+             "created": (a.get("created", ""))[:16].replace("T", " "),
+             "url": a.get("content", "")}
+            for a in (fields.get("attachment") or [])
+        ],
         # Related tickets
         "linked_issues": linked,
         # Grafana (placeholder — enriched below with full context)
@@ -2060,6 +2120,10 @@ def _build_context(identifier: str, issue: dict,
         "raw_issue": issue,
     }
     result["grafana"] = _build_grafana_urls(node_name, hostname, service_tag, netbox_device, ctx=result)
+
+    # Parse PSU details from description text (for PSU tickets)
+    result["psu_info"] = _extract_psu_info(result.get("description_text", ""))
+
     return result
 
 
@@ -5637,9 +5701,11 @@ def _print_action_panel(ctx: dict):
         diag_label = "Close Diags" if ctx.get("_show_diags") else "Diags"
         view_items.append(btn("d", diag_label, BLUE))
     _cc = ctx.get("_comment_count") or len(ctx.get("comments") or [])
-    if _cc:
-        cmt_label = "Close Comments" if ctx.get("_show_comments") else f"Comments ({_cc})"
-        view_items.append(btn("c", cmt_label, GREEN))
+    cmt_label = "Close Comments" if ctx.get("_show_comments") else f"Comments ({_cc})"
+    view_items.append(btn("c", cmt_label, GREEN))
+    _att = ctx.get("attachments", [])
+    if _att:
+        view_items.append(btn("at", f"Attachments ({len(_att)})", MAGENTA))
     if (netbox and netbox.get("rack_id")) or ctx.get("rack_location"):
         view_items.append(btn("e", "Rack View", YELLOW))
     is_ticket = ctx.get("source") != "netbox"
@@ -5757,6 +5823,40 @@ def _print_action_panel(ctx: dict):
     if _ai_available():
         nav_items.append(btn("ai", "AI", CYAN))
     print(f"  {DIM}Nav{RESET}  {'   '.join(nav_items)}")
+
+    # --- Contextual tip ---
+    if is_ticket:
+        status_lower = ctx.get("status", "").lower()
+        summary_lower = (ctx.get("summary") or "").lower()
+        ho = ctx.get("ho_context")
+        ho_hint = (ho.get("hint", "") if ho else "").lower()
+        age = ctx.get("status_age_seconds", 0)
+        tip = ""
+        if status_lower in ("to do", "new", "awaiting support", "awaiting triage"):
+            tip = "Grab and start work to pick this up" if not ctx.get("assignee") else "Start work — this ticket is waiting on you"
+        elif status_lower == "in progress":
+            if "recable" in summary_lower or "recable" in ho_hint:
+                tip = "Recable the node, then set to Verification"
+            elif "power_cycle" in summary_lower.replace(" ", "_"):
+                tip = "Power cycle done? Set to Verification"
+            elif "reseat" in summary_lower:
+                tip = "Reseat complete? Comment what you did, then Verify"
+            elif "swap" in summary_lower:
+                tip = "Swap done? Note old/new serials, then Verify"
+            else:
+                tip = "Work done? Set to Verification — still working? Put On Hold"
+        elif status_lower == "verification":
+            if age > 48 * 3600:
+                tip = f"STALE — in Verification for {_format_age(age)}. Close or reopen"
+            else:
+                tip = "Waiting for requester to verify. Close if confirmed good"
+        elif status_lower in ("on hold", "blocked", "paused", "waiting for support"):
+            tip = "Ready to resume? Go back to In Progress"
+        elif status_lower == "closed":
+            tip = "Closed. Check node history for related tickets"
+        if tip:
+            color = RED if "STALE" in tip else YELLOW
+            print(f"  {color}TIP:{RESET} {DIM}{tip}{RESET}")
     print()
 
 
@@ -6304,6 +6404,26 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _clear_screen()
             _print_pretty(ctx)
             continue
+        if choice == "at" and ctx and ctx.get("attachments"):
+            attachments = ctx["attachments"]
+            print(f"\n  {BOLD}Attachments ({len(attachments)}){RESET}\n")
+            for i, att in enumerate(attachments, 1):
+                size_kb = att.get("size", 0) / 1024
+                size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
+                print(f"    {BOLD}{i}{RESET}  {CYAN}{att['filename']}{RESET}  {DIM}{size_str}  {att['created']}  {att['author']}{RESET}")
+            print(f"\n  {DIM}Pick a number to open in browser, or ENTER to go back{RESET}")
+            try:
+                att_pick = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                att_pick = ""
+            if att_pick.isdigit():
+                idx = int(att_pick) - 1
+                if 0 <= idx < len(attachments) and attachments[idx].get("url"):
+                    print(f"  {DIM}Opening {attachments[idx]['filename']}...{RESET}")
+                    webbrowser.open(attachments[idx]["url"])
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
         if choice == "fd" and ctx and ctx.get("service_tag"):
             tag = ctx["service_tag"]
             base_url = f"https://fleetops-storage.cwobject.com/diags/{tag}"
@@ -6419,7 +6539,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             continue
 
         # --- Inline views (clear + ticket info + inline content) ---
-        if choice == "c" and ctx and (ctx.get("comments") or ctx.get("_raw_comments")):
+        if choice == "c" and ctx:
             # Lazy-parse comments on first access
             if not ctx.get("comments") and ctx.get("_raw_comments"):
                 ctx["comments"] = _extract_comments(
@@ -8517,6 +8637,22 @@ def _print_pretty(ctx: dict):
             print(f"  {'RMA Reason':<14} {YELLOW}{ctx['rma_reason']}{RESET}")
         if ctx.get("node_name"):
             print(f"  {'Node':<14} {CYAN}{ctx['node_name']}{RESET}")
+
+    # PSU quick-reference (for PSU tickets)
+    psu = ctx.get("psu_info")
+    if psu:
+        print(f"  {DIM}{line}{RESET}")
+        psu_id = psu.get("psu_id", "?")
+        if psu.get("all_psu_ids") and len(psu["all_psu_ids"]) > 1:
+            all_ids = ", ".join(f"PSU {p}" for p in psu["all_psu_ids"])
+            print(f"  {YELLOW}{BOLD}⚡ {all_ids}{RESET}  {RED}{BOLD}← FAILED{RESET}")
+        else:
+            print(f"  {YELLOW}{BOLD}⚡ PSU {psu_id}{RESET}  {RED}{BOLD}← REMOVE THIS ONE{RESET}")
+        # Show PSU health Grafana link if available in diag_links
+        for dl in ctx.get("diag_links") or []:
+            if "psu" in dl.get("label", "").lower() or "psu" in dl.get("url", "").lower():
+                print(f"    {GREEN}Dashboard:{RESET} {DIM}{dl['url'][:90]}{RESET}")
+                break
 
     # HO context (linked HO for this DO)
     ho = ctx.get("ho_context")
