@@ -2212,10 +2212,12 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
     # Add ticket lookup awareness to system prompt
     enhanced_system = system + (
         "\n\nYou have access to the user's recent tickets, bookmarks, and last viewed ticket. "
-        "When they say 'open my last ticket' or 'go back to that ticket', reference the LAST VIEWED ticket from the context. "
-        "Tell them the ticket key so they can type it to load it. "
-        "You can also help find tickets — suggest they type 'find' followed by keywords, "
-        "or type a ticket key like DO-12345 to load it directly."
+        "IMPORTANT: When the user wants to open, load, or go to a ticket, you MUST respond with "
+        "EXACTLY this format on its own line: [LOAD:DO-12345] (replacing DO-12345 with the actual key). "
+        "This triggers the app to open the ticket automatically. "
+        "Examples: if they say 'open my last ticket' and the last viewed is DO-90226, respond with [LOAD:DO-90226]. "
+        "If they say 'open it' after discussing a ticket, respond with [LOAD:<that ticket key>]. "
+        "You can also help find tickets — suggest they type 'find' followed by keywords."
     )
 
     messages = [{"role": "system", "content": enhanced_system}]
@@ -2237,6 +2239,11 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
         response = _ai_chat(messages)
         if response:
             messages.append({"role": "assistant", "content": response})
+            load_match = re.search(r'\[LOAD:([A-Z]+-\d+)\]', response)
+            if load_match:
+                found_key = load_match.group(1)
+                print(f"\n  {GREEN}Opening {found_key}...{RESET}")
+                return found_key
 
     while True:
         try:
@@ -2279,6 +2286,13 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
         response = _ai_chat(messages)
         if response:
             messages.append({"role": "assistant", "content": response})
+
+            # Check if AI wants to load a ticket via [LOAD:XX-NNNNN]
+            load_match = re.search(r'\[LOAD:([A-Z]+-\d+)\]', response)
+            if load_match:
+                found_key = load_match.group(1)
+                print(f"\n  {GREEN}Opening {found_key}...{RESET}")
+                break
 
         # Cap history at 20 messages (keep system + context)
         while len(messages) > 22:
