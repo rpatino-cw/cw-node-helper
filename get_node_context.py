@@ -5149,6 +5149,7 @@ def _print_action_panel(ctx: dict):
         status_lower = ctx.get("status", "").lower()
 
         if status_lower in ("to do", "new", "open", "waiting for triage",
+                            "awaiting triage", "awaiting support",
                             "reopened") and (mine or unassigned):
             status_items.append(btn("s", "Start Work", GREEN))
 
@@ -5157,7 +5158,7 @@ def _print_action_panel(ctx: dict):
             status_items.append(btn("y", "On Hold", YELLOW))
 
         if status_lower in ("on hold", "blocked", "paused",
-                            "waiting for support") and mine:
+                            "waiting for support", "awaiting support") and mine:
             status_items.append(btn("z", "Resume", CYAN))
 
         if status_lower == "verification" and mine:
