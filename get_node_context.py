@@ -23,6 +23,7 @@ Environment variables optional (NetBox enrichment):
 from __future__ import annotations   # allows str | None on Python 3.9
 
 import argparse
+import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
@@ -1722,7 +1723,7 @@ def _search_queue(site: str, email: str, token: str,
         "customfield_10193",   # service_tag
         "customfield_10207",   # rack_location
         "customfield_10194",   # site
-        "assignee", "updated", "statuscategorychangedate",
+        "assignee", "created", "updated", "statuscategorychangedate",
     ]
 
     if not _site_escaped:
@@ -3094,6 +3095,88 @@ def _ntfy_send(title: str, message: str, priority: str = "default", tags: str = 
         pass
 
 
+# Tracks which tickets already got a stale/SLA alert (avoid repeat spam)
+_ntfy_alerted: set = set()
+
+STALE_UNASSIGNED_HOURS = 2  # alert if unassigned for this long
+
+
+def _check_stale_unassigned(issues: list, site: str):
+    """Send ntfy alert for tickets sitting unassigned too long."""
+    if not _NTFY_ENABLED or not NTFY_TOPIC:
+        return
+    now = time.time()
+    stale = []
+    for iss in issues:
+        key = iss.get("key", "")
+        fields = iss.get("fields", {})
+        assignee = fields.get("assignee")
+        if assignee:
+            continue  # assigned, skip
+        created = fields.get("created", "")
+        if not created:
+            continue
+        try:
+            # Jira format: 2025-03-04T14:30:00.000+0000
+            created_ts = datetime.datetime.strptime(
+                created[:19], "%Y-%m-%dT%H:%M:%S").timestamp()
+            age_hours = (now - created_ts) / 3600
+            if age_hours >= STALE_UNASSIGNED_HOURS:
+                alert_key = f"stale:{key}"
+                if alert_key not in _ntfy_alerted:
+                    stale.append(key)
+                    _ntfy_alerted.add(alert_key)
+        except Exception:
+            continue
+    if stale:
+        msg = f"{len(stale)} unassigned ticket{'s' if len(stale) > 1 else ''}"
+        msg += f" sitting {STALE_UNASSIGNED_HOURS}h+"
+        if site:
+            msg += f" in {site}"
+        msg += f": {', '.join(stale[:5])}"
+        _ntfy_send("Stale Tickets", msg, priority="high", tags="hourglass")
+
+
+def _check_sla_warnings(issues: list, email: str, token: str):
+    """Check SLA on the user's assigned tickets — alert if close to breach."""
+    if not _NTFY_ENABLED or not NTFY_TOPIC:
+        return
+    my_tickets = []
+    for iss in issues:
+        fields = iss.get("fields", {})
+        assignee = fields.get("assignee")
+        if assignee and assignee.get("emailAddress") == email:
+            my_tickets.append(iss)
+    # Only check up to 5 tickets per cycle to avoid API flood
+    for iss in my_tickets[:5]:
+        key = iss.get("key", "")
+        alert_key = f"sla:{key}"
+        if alert_key in _ntfy_alerted:
+            continue
+        try:
+            sla_data = _fetch_sla(key, email, token)
+            for s in sla_data:
+                ongoing = s.get("ongoingCycle", {})
+                if not ongoing:
+                    continue
+                breached = ongoing.get("breached", False)
+                remaining = ongoing.get("remainingTime", {})
+                millis = remaining.get("millis", None)
+                friendly = remaining.get("friendly", "")
+                if breached:
+                    _ntfy_send("SLA BREACHED",
+                               f"{key} — {s.get('name', 'SLA')} breached!",
+                               priority="urgent", tags="red_circle")
+                    _ntfy_alerted.add(alert_key)
+                elif millis is not None and millis < 3600000:  # < 1 hour left
+                    _ntfy_send("SLA Warning",
+                               f"{key} — {friendly} remaining ({s.get('name', 'SLA')})",
+                               priority="high", tags="warning")
+                    _ntfy_alerted.add(alert_key)
+        except Exception:
+            continue
+
+
 def _watcher_wait(interval: int, has_new: bool) -> str | None:
     """Wait for `interval` seconds, but let the user type a ticket key anytime.
 
@@ -3241,6 +3324,10 @@ def _run_queue_watcher(email: str, token: str, site: str,
                     print(f"  {DIM}[{ts}] No changes — {len(current_keys)} open{RESET}")
 
                 known_keys = current_keys
+
+            # ntfy.sh: check for stale unassigned + SLA warnings
+            _check_stale_unassigned(issues, site)
+            _check_sla_warnings(issues, email, token)
 
             # Wait for next poll — user can type a ticket key to open it
             ticket_key = _watcher_wait(interval, has_new)
@@ -3453,6 +3540,10 @@ def _background_watcher_loop(email: str, token: str, site: str,
                                        priority="high",
                                        tags="rotating_light")
                 known_keys = current_keys
+
+            # ntfy.sh: check for stale unassigned + SLA warnings
+            _check_stale_unassigned(issues, site)
+            _check_sla_warnings(issues, email, token)
         except Exception:
             pass  # silently retry next interval
 
@@ -6113,58 +6204,49 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                     _LinkParser().feed(_curl_result.stdout)
 
                     if _fd_links:
-                        print(f"\n  {BOLD}Fleet Diags — {tag}{RESET}  {DIM}({len(_fd_links)} logs){RESET}\n")
-                        for i, lg in enumerate(_fd_links[:25], 1):
-                            fname = lg["url"].rsplit("/", 1)[-1]
-                            mode = lg.get("mode", "")
-                            mode_str = f" {DIM}[{mode}]{RESET}" if mode else ""
-                            time_str = f"{DIM}{lg.get('time', '')}{RESET}"
-                            print(f"  {BOLD}{i:>2}.{RESET}  {CYAN}{fname:<50}{RESET} {time_str}{mode_str}")
-                        print(f"\n  {DIM}[#] open in browser  [ai] analyze with AI  [ENTER] back{RESET}")
-                        try:
-                            fd_pick = input("  > ").strip()
-                        except (EOFError, KeyboardInterrupt):
-                            fd_pick = ""
-                        if fd_pick.isdigit():
-                            idx = int(fd_pick) - 1
-                            if 0 <= idx < len(_fd_links):
-                                webbrowser.open(_fd_links[idx]["url"])
-                        elif fd_pick.lower() == "ai" or fd_pick.lower().startswith("ai "):
-                            # Fetch the most useful text logs and send to AI
-                            print(f"\n  {DIM}Fetching key logs for AI analysis...{RESET}")
-                            log_text = []
-                            # Prioritize: sel.log, dmesg.log, alert_history, firmware_versions, nvidia_smi
-                            priority_names = ["sel.log", "dmesg.log", "alert_history.yaml",
-                                              "firmware_versions.yaml", "nvidia_smi_q.txt",
-                                              "nvidia_smi_nvlink.txt"]
-                            fetched = 0
-                            for pname in priority_names:
-                                for lg in _fd_links:
-                                    if lg["url"].endswith(pname) and fetched < 4:
-                                        try:
-                                            _lr = subprocess.run(
-                                                ["curl", "-s", "--max-time", "15", lg["url"]],
-                                                capture_output=True, text=True, timeout=20)
-                                            if _lr.returncode == 0 and _lr.stdout:
-                                                content = _lr.stdout
-                                                if len(content) < 15000:
-                                                    log_text.append(f"\n--- {pname} ---\n{content}")
-                                                else:
-                                                    log_text.append(f"\n--- {pname} (truncated) ---\n{content[:10000]}")
-                                                fetched += 1
-                                                print(f"    {GREEN}Fetched {pname}{RESET}")
-                                        except Exception:
-                                            pass
-                                        break
-                            if log_text:
-                                initial = fd_pick[3:].strip() if fd_pick.lower().startswith("ai ") else "Analyze these diagnostic logs. What's wrong with this node?"
-                                # Temporarily augment ctx with log data
-                                ctx["_fleet_diag_logs"] = "\n".join(log_text)
+                        # Auto-fetch key logs and analyze — one button, instant results
+                        priority_names = ["sel.log", "dmesg.log", "alert_history.yaml",
+                                          "firmware_versions.yaml", "nvidia_smi_q.txt",
+                                          "nvidia_smi_nvlink.txt", "lspci.txt"]
+                        log_text = []
+                        fetched = 0
+                        print(f"  {DIM}Found {len(_fd_links)} logs. Fetching key files...{RESET}")
+                        for pname in priority_names:
+                            for lg in _fd_links:
+                                if lg["url"].endswith(pname) and fetched < 5:
+                                    try:
+                                        _lr = subprocess.run(
+                                            ["curl", "-s", "--max-time", "15", lg["url"]],
+                                            capture_output=True, text=True, timeout=20)
+                                        if _lr.returncode == 0 and _lr.stdout:
+                                            content = _lr.stdout
+                                            if len(content) > 12000:
+                                                content = content[:12000] + "\n[...truncated]"
+                                            log_text.append(f"\n--- {pname} ---\n{content}")
+                                            fetched += 1
+                                            print(f"    {GREEN}{pname}{RESET}")
+                                    except Exception:
+                                        pass
+                                    break
+                        if log_text:
+                            ctx["_fleet_diag_logs"] = "\n".join(log_text)
+                            if _ai_available():
                                 _ai_dispatch(ctx=ctx, email=email or "", token=token or "",
-                                             initial_msg=initial)
-                                ctx.pop("_fleet_diag_logs", None)
+                                             initial_msg="Analyze these diagnostic logs. Summarize what's important — errors, warnings, hardware issues, missing components. Be specific with line references.")
                             else:
-                                print(f"  {YELLOW}Could not fetch any text logs.{RESET}")
+                                # No AI — print raw log excerpts
+                                print(f"\n  {BOLD}Fleet Diags — {tag}{RESET}\n")
+                                for lt in log_text:
+                                    lines_list = lt.split("\n")
+                                    for line in lines_list[:30]:
+                                        print(f"  {DIM}{line}{RESET}")
+                                    if len(lines_list) > 30:
+                                        print(f"  {DIM}  ...({len(lines_list) - 30} more lines){RESET}")
+                                input(f"\n  {DIM}Press ENTER to continue...{RESET}")
+                            ctx.pop("_fleet_diag_logs", None)
+                        else:
+                            print(f"  {YELLOW}No text logs found. Opening in browser...{RESET}")
+                            webbrowser.open(f"{base_url}/index.html")
                     else:
                         print(f"  {YELLOW}No logs found for {tag}.{RESET}")
                         print(f"  {DIM}Opening in browser instead...{RESET}")
