@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#08080a">
+<title>Setup Guide — CW Node Helper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ------------------------------------------------------------------ */
+/*  RESET & BASE  (matches index.html / cicd.html)                    */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:        #08080a;
+  --bg-raised: #0f1014;
+  --surface:   #1a1b24;
+  --border:    #222330;
+  --border-lt: #2a2b3a;
+
+  --text:      #c8c9d4;
+  --text-dim:  #6b6d80;
+  --text-mute: #44465a;
+
+  --accent:    #d4943a;
+  --accent-lt: #e8b86a;
+  --accent-dk: #8a5e1e;
+
+  --ansi-red:     #e06c75;
+  --ansi-green:   #98c379;
+  --ansi-yellow:  #e5c07b;
+  --ansi-blue:    #61afef;
+  --ansi-magenta: #c678dd;
+  --ansi-cyan:    #56b6c2;
+  --ansi-white:   #dcdfe4;
+  --ansi-dim:     #636578;
+
+  --bg-terminal:        #0c0d12;
+  --bg-terminal-chrome: #16171e;
+
+  --font-body: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--accent-dk);
+  color: var(--ansi-white);
+}
+
+a { color: var(--accent-lt); text-decoration: none; }
+a:hover { color: var(--accent); }
+
+/* Scanline overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ------------------------------------------------------------------ */
+/*  LAYOUT                                                            */
+/* ------------------------------------------------------------------ */
+.wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 clamp(1.5rem, 4vw, 3rem);
+}
+
+/* ------------------------------------------------------------------ */
+/*  NAV                                                               */
+/* ------------------------------------------------------------------ */
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 1rem 0;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.4s;
+}
+nav.scrolled { border-bottom-color: var(--border); }
+
+nav .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 860px;
+}
+
+.nav-brand {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--ansi-white);
+  letter-spacing: -0.02em;
+}
+.nav-brand span { color: var(--accent); }
+
+.nav-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+}
+
+.nav-links a {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--text); }
+
+/* ------------------------------------------------------------------ */
+/*  HERO                                                              */
+/* ------------------------------------------------------------------ */
+.hero {
+  padding-top: 8rem;
+  padding-bottom: 3rem;
+}
+
+.hero-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.hero-label::before {
+  content: '';
+  width: 2rem;
+  height: 1px;
+  background: var(--accent);
+}
+
+h1 {
+  font-family: var(--font-body);
+  font-size: clamp(2rem, 4.5vw, 3rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+  color: var(--ansi-white);
+  margin-bottom: 1rem;
+}
+h1 .hl { color: var(--accent); }
+
+.hero-sub {
+  font-size: 1.1rem;
+  color: var(--text-dim);
+  max-width: 540px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ */
+/*  TABLE OF CONTENTS                                                 */
+/* ------------------------------------------------------------------ */
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 2rem 0 3rem;
+}
+.toc h2 {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+.toc ol {
+  list-style: none;
+  counter-reset: toc-counter;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 2rem;
+}
+@media (max-width: 600px) {
+  .toc ol { grid-template-columns: 1fr; }
+}
+.toc li {
+  counter-increment: toc-counter;
+}
+.toc li a {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  transition: color 0.2s;
+}
+.toc li a:hover { color: var(--ansi-white); }
+.toc li a::before {
+  content: counter(toc-counter, decimal-leading-zero);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-dk);
+  min-width: 1.8rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  SECTIONS                                                          */
+/* ------------------------------------------------------------------ */
+section {
+  margin-bottom: 4rem;
+  scroll-margin-top: 5rem;
+}
+
+.step-number {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.step-number::before {
+  content: '';
+  width: 1.5rem;
+  height: 1px;
+  background: var(--accent-dk);
+}
+
+h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--ansi-white);
+  letter-spacing: -0.03em;
+  margin-bottom: 1rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ansi-white);
+  margin: 1.5rem 0 0.75rem;
+}
+
+p {
+  margin-bottom: 1rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+/* ------------------------------------------------------------------ */
+/*  TERMINAL BLOCKS                                                   */
+/* ------------------------------------------------------------------ */
+.terminal {
+  background: var(--bg-terminal);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 1.25rem 0;
+  overflow: hidden;
+}
+
+.terminal-chrome {
+  background: var(--bg-terminal-chrome);
+  padding: 0.65rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.terminal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-lt);
+}
+.terminal-dot:nth-child(1) { background: #e06c75; }
+.terminal-dot:nth-child(2) { background: #e5c07b; }
+.terminal-dot:nth-child(3) { background: #98c379; }
+.terminal-title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-mute);
+  margin-left: 0.5rem;
+}
+
+.terminal pre {
+  padding: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.7;
+  overflow-x: auto;
+  color: var(--text);
+}
+
+/* Syntax colors inside terminal */
+.terminal .prompt { color: var(--ansi-green); }
+.terminal .cmd    { color: var(--ansi-white); }
+.terminal .out    { color: var(--text-dim); }
+.terminal .cmt    { color: var(--ansi-dim); font-style: italic; }
+.terminal .hl     { color: var(--accent-lt); }
+.terminal .ok     { color: var(--ansi-green); }
+.terminal .err    { color: var(--ansi-red); }
+.terminal .warn   { color: var(--ansi-yellow); }
+.terminal .blue   { color: var(--ansi-blue); }
+.terminal .cyan   { color: var(--ansi-cyan); }
+
+/* Copyable commands */
+.terminal .copy-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+}
+.terminal .copy-line:hover { background: rgba(255,255,255,0.02); }
+
+/* ------------------------------------------------------------------ */
+/*  CALLOUT BOXES                                                     */
+/* ------------------------------------------------------------------ */
+.callout {
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin: 1.25rem 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  border: 1px solid;
+}
+
+.callout-info {
+  background: color-mix(in srgb, var(--ansi-blue) 8%, var(--bg));
+  border-color: color-mix(in srgb, var(--ansi-blue) 25%, var(--border));
+  color: var(--text);
+}
+.callout-info .callout-icon { color: var(--ansi-blue); }
+
+.callout-warn {
+  background: color-mix(in srgb, var(--ansi-yellow) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--ansi-yellow) 20%, var(--border));
+  color: var(--text);
+}
+.callout-warn .callout-icon { color: var(--ansi-yellow); }
+
+.callout-success {
+  background: color-mix(in srgb, var(--ansi-green) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--ansi-green) 20%, var(--border));
+}
+.callout-success .callout-icon { color: var(--ansi-green); }
+
+.callout-danger {
+  background: color-mix(in srgb, var(--ansi-red) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--ansi-red) 20%, var(--border));
+}
+.callout-danger .callout-icon { color: var(--ansi-red); }
+
+.callout-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  color: var(--ansi-white);
+}
+
+/* ------------------------------------------------------------------ */
+/*  NUMBERED INSTRUCTIONS (within prose)                              */
+/* ------------------------------------------------------------------ */
+.steps {
+  list-style: none;
+  counter-reset: step-counter;
+  margin: 1rem 0;
+}
+.steps li {
+  counter-increment: step-counter;
+  padding: 0.75rem 0 0.75rem 3rem;
+  position: relative;
+  border-bottom: 1px solid var(--border);
+}
+.steps li:last-child { border-bottom: none; }
+.steps li::before {
+  content: counter(step-counter);
+  position: absolute;
+  left: 0;
+  top: 0.75rem;
+  width: 2rem;
+  height: 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border-lt);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  background: var(--surface);
+  padding: 0.15em 0.45em;
+  border-radius: 4px;
+  color: var(--accent-lt);
+}
+
+/* ------------------------------------------------------------------ */
+/*  PROGRESS TRACKER                                                  */
+/* ------------------------------------------------------------------ */
+.progress {
+  position: fixed;
+  top: 4rem;
+  right: 2rem;
+  width: 3px;
+  height: calc(100vh - 8rem);
+  background: var(--border);
+  border-radius: 2px;
+  z-index: 50;
+}
+.progress-bar {
+  width: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: height 0.15s ease-out;
+}
+@media (max-width: 960px) {
+  .progress { display: none; }
+}
+
+/* ------------------------------------------------------------------ */
+/*  OPTION TABS                                                       */
+/* ------------------------------------------------------------------ */
+.option-tabs {
+  display: flex;
+  gap: 0;
+  margin: 1rem 0 0;
+  border-bottom: 1px solid var(--border);
+}
+.option-tab {
+  padding: 0.65rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.option-tab:hover { color: var(--text); }
+.option-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.option-panel { display: none; }
+.option-panel.active { display: block; }
+
+/* ------------------------------------------------------------------ */
+/*  FOOTER                                                            */
+/* ------------------------------------------------------------------ */
+footer {
+  padding: 3rem 0;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  color: var(--text-mute);
+  font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  SCREENSHOT PLACEHOLDERS                                           */
+/* ------------------------------------------------------------------ */
+.screenshot {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2rem;
+  margin: 1rem 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.8;
+  white-space: pre;
+}
+
+</style>
+</head>
+
+<body>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="wrap">
+    <div class="nav-brand">cw-node-helper<span>:</span>setup</div>
+    <ul class="nav-links">
+      <li><a href="index.html">Docs</a></li>
+      <li><a href="cicd.html">CI/CD</a></li>
+      <li><a href="setup-guide.html">Setup</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="hero-label">New here?</div>
+    <h1>Setup Guide<br><span class="hl">from Zero to Running</span></h1>
+    <p class="hero-sub">
+      A step-by-step walkthrough to get the cw-node-helper tool running on your Mac.
+      No experience needed. Just follow along.
+    </p>
+  </div>
+</header>
+
+<!-- PROGRESS BAR -->
+<div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+<main class="wrap">
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+  <h2>Steps</h2>
+  <ol>
+    <li><a href="#checklist">Before you start</a></li>
+    <li><a href="#terminal">Open Terminal</a></li>
+    <li><a href="#homebrew">Install Homebrew</a></li>
+    <li><a href="#git">Install Git</a></li>
+    <li><a href="#python">Install Python</a></li>
+    <li><a href="#github-access">Set up GitHub access</a></li>
+    <li><a href="#clone">Clone the repo</a></li>
+    <li><a href="#env">Create your .env file</a></li>
+    <li><a href="#run">Run the tool</a></li>
+    <li><a href="#update">Staying up to date</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+  </ol>
+</div>
+
+
+<!-- ============================================================== -->
+<!--  STEP 1: BEFORE YOU START                                      -->
+<!-- ============================================================== -->
+<section id="checklist">
+  <div class="step-number">Step 01</div>
+  <h2>Before You Start</h2>
+  <p>Make sure you have these three things. If you're missing any, ask your manager or Ricky.</p>
+
+  <div class="callout callout-info">
+    <div class="callout-header"><span class="callout-icon">&#9432;</span> What you need</div>
+    <ol class="steps">
+      <li>
+        <strong>A Mac laptop</strong> &mdash; the tool runs in Terminal. Windows works too with WSL, but this guide covers Mac.
+      </li>
+      <li>
+        <strong>Your CoreWeave email</strong> &mdash; something like <code>yourname@coreweave.com</code>
+      </li>
+      <li>
+        <strong>Access to the GitHub repo</strong> &mdash; go to
+        <a href="https://github.com/coreweave/TopoWeave" target="_blank">github.com/coreweave/TopoWeave</a>.
+        If you see "404" or "Page not found", you don't have access yet. Ask your manager to add you to the repo.
+      </li>
+    </ol>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 2: OPEN TERMINAL                                        -->
+<!-- ============================================================== -->
+<section id="terminal">
+  <div class="step-number">Step 02</div>
+  <h2>Open Terminal</h2>
+  <p>Terminal is a built-in app on every Mac. It lets you type commands instead of clicking around. Here's how to open it:</p>
+
+  <ol class="steps">
+    <li>
+      Press <code>Cmd</code> + <code>Space</code> on your keyboard. This opens <strong>Spotlight Search</strong> &mdash; a little search bar in the middle of your screen.
+    </li>
+    <li>
+      Type the word <strong>Terminal</strong> and press <code>Enter</code>.
+    </li>
+    <li>
+      A black (or white) window appears with a blinking cursor. That's Terminal. You type commands here and press <code>Enter</code> to run them.
+    </li>
+  </ol>
+
+  <div class="screenshot">
+&#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9484;
+&#9474;  <span style="color: var(--ansi-dim);">Terminal  &mdash;  bash  &mdash;  80x24</span>                                              &#9474;
+&#9500;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9508;
+&#9474;                                                                                  &#9474;
+&#9474;  <span style="color: var(--ansi-green);">yourname@MacBook-Pro</span> <span style="color: var(--ansi-blue);">~</span> <span style="color: var(--ansi-white);">$</span> <span style="color: var(--text-mute);">&#9608;</span>                                                    &#9474;
+&#9474;                                                                                  &#9474;
+&#9474;  <span style="color: var(--text-mute);">This is where you type commands.</span>                                             &#9474;
+&#9474;  <span style="color: var(--text-mute);">Type something, press Enter. That's it.</span>                                      &#9474;
+&#9474;                                                                                  &#9474;
+&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;</div>
+
+  <div class="callout callout-info">
+    <div class="callout-header"><span class="callout-icon">&#9432;</span> Tip</div>
+    Don't be scared of Terminal. You're just typing text and pressing Enter. If something goes wrong, you can always close the window and open a new one. Nothing breaks.
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 3: INSTALL HOMEBREW                                     -->
+<!-- ============================================================== -->
+<section id="homebrew">
+  <div class="step-number">Step 03</div>
+  <h2>Install Homebrew</h2>
+  <p><strong>Homebrew</strong> is like an app store for Terminal. It lets you install developer tools with one command. You need it to install Git and Python.</p>
+
+  <h3>Check if you already have it</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">brew --version</span></pre>
+  </div>
+
+  <p>If you see a version number like <code>Homebrew 4.x.x</code>, skip to the next step. If you see <code>command not found</code>, install it:</p>
+
+  <h3>Install Homebrew</h3>
+  <p>Copy and paste this entire line into Terminal and press <code>Enter</code>:</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; paste this whole line</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</span></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-header"><span class="callout-icon">&#9888;</span> It will ask for your password</div>
+    Type your Mac login password. <strong>You won't see the characters as you type</strong> &mdash; that's normal. Just type it and press Enter. It may also ask you to press Enter to confirm. Just follow the prompts.
+  </div>
+
+  <p>This takes a few minutes. When it finishes, it may print some <strong>"Next steps"</strong> telling you to run two more commands. If it does, copy and run those too. They look something like:</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; only if Homebrew told you to</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile</span>
+<span class="prompt">$</span> <span class="cmd">eval "$(/opt/homebrew/bin/brew shellenv)"</span></pre>
+  </div>
+
+  <h3>Verify it worked</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">brew --version</span>
+<span class="ok">Homebrew 4.4.x</span>   <span class="cmt">&larr; you should see something like this</span></pre>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 4: INSTALL GIT                                          -->
+<!-- ============================================================== -->
+<section id="git">
+  <div class="step-number">Step 04</div>
+  <h2>Install Git</h2>
+  <p><strong>Git</strong> is the tool that downloads code and keeps it in sync. Think of it like Google Drive for code.</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">brew install git</span></pre>
+  </div>
+
+  <h3>Verify</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">git --version</span>
+<span class="ok">git version 2.x.x</span></pre>
+  </div>
+
+  <h3>Tell Git who you are</h3>
+  <p>Replace the name and email with <strong>your actual name and CoreWeave email</strong>:</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; use YOUR real name and email</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">git config --global user.name "<span class="hl">Your Name</span>"</span>
+<span class="prompt">$</span> <span class="cmd">git config --global user.email "<span class="hl">your.name@coreweave.com</span>"</span></pre>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 5: INSTALL PYTHON                                       -->
+<!-- ============================================================== -->
+<section id="python">
+  <div class="step-number">Step 05</div>
+  <h2>Install Python</h2>
+  <p>The tool is written in Python. You need Python 3.10 or newer.</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">brew install python3</span></pre>
+  </div>
+
+  <h3>Verify</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">python3 --version</span>
+<span class="ok">Python 3.12.x</span>   <span class="cmt">&larr; 3.10 or higher is fine</span></pre>
+  </div>
+
+  <h3>Install the one library the tool needs</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">pip3 install requests</span></pre>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 6: GITHUB ACCESS                                       -->
+<!-- ============================================================== -->
+<section id="github-access">
+  <div class="step-number">Step 06</div>
+  <h2>Set Up GitHub Access</h2>
+  <p>You need to prove to GitHub that you're <em>you</em> so it lets you download the code. There are two ways. <strong>Option A is easier</strong>.</p>
+
+  <!-- Tabs -->
+  <div class="option-tabs" data-group="gh-auth">
+    <button class="option-tab active" data-tab="gh-cli">Option A: GitHub CLI (Easier)</button>
+    <button class="option-tab" data-tab="ssh-key">Option B: SSH Key</button>
+  </div>
+
+  <!-- Option A: gh CLI -->
+  <div class="option-panel active" data-panel="gh-cli" data-group="gh-auth">
+    <h3>Install the GitHub CLI</h3>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> <span class="cmd">brew install gh</span></pre>
+    </div>
+
+    <h3>Log in to GitHub</h3>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> <span class="cmd">gh auth login</span></pre>
+    </div>
+
+    <p>It will ask you a few questions. Answer like this:</p>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal &mdash; follow the prompts</span>
+      </div>
+      <pre><span class="out">? What account do you want to log into?</span>  <span class="hl">GitHub.com</span>
+<span class="out">? What is your preferred protocol?</span>        <span class="hl">HTTPS</span>
+<span class="out">? Authenticate Git with your GitHub credentials?</span> <span class="hl">Yes</span>
+<span class="out">? How would you like to authenticate?</span>     <span class="hl">Login with a web browser</span>
+
+<span class="out">! First copy your one-time code:</span> <span class="warn">XXXX-XXXX</span>
+<span class="out">Press Enter to open github.com in your browser...</span></pre>
+    </div>
+
+    <ol class="steps">
+      <li>It gives you a code (like <code>ABCD-1234</code>). <strong>Copy it</strong>.</li>
+      <li>It opens your browser to GitHub. <strong>Paste the code</strong> when asked.</li>
+      <li>Click <strong>Authorize</strong>.</li>
+      <li>Go back to Terminal. It should say <strong>"Logged in"</strong>.</li>
+    </ol>
+
+    <div class="callout callout-success">
+      <div class="callout-header"><span class="callout-icon">&#10003;</span> Done</div>
+      Git is now connected to your GitHub account. You can download code.
+    </div>
+  </div>
+
+  <!-- Option B: SSH Key -->
+  <div class="option-panel" data-panel="ssh-key" data-group="gh-auth">
+    <h3>Generate an SSH key</h3>
+    <p>Replace the email with yours:</p>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> <span class="cmd">ssh-keygen -t ed25519 -C "<span class="hl">your.name@coreweave.com</span>"</span></pre>
+    </div>
+
+    <p>It will ask where to save the file. <strong>Just press Enter</strong> to accept the default. It will ask for a passphrase. You can <strong>press Enter twice</strong> to skip it (no passphrase).</p>
+
+    <h3>Copy your key</h3>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal &mdash; this copies the key to your clipboard</span>
+      </div>
+      <pre><span class="prompt">$</span> <span class="cmd">pbcopy &lt; ~/.ssh/id_ed25519.pub</span></pre>
+    </div>
+
+    <p>Nothing visually happens, but the key is now copied to your clipboard.</p>
+
+    <h3>Add it to GitHub</h3>
+    <ol class="steps">
+      <li>Open <a href="https://github.com/settings/ssh/new" target="_blank">github.com/settings/ssh/new</a> in your browser</li>
+      <li>In the <strong>Title</strong> field, type something like <code>Work Mac</code></li>
+      <li>In the <strong>Key</strong> field, press <code>Cmd + V</code> to paste</li>
+      <li>Click <strong>Add SSH key</strong></li>
+    </ol>
+
+    <h3>Test it</h3>
+    <div class="terminal">
+      <div class="terminal-chrome">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> <span class="cmd">ssh -T git@github.com</span>
+<span class="ok">Hi yourname! You've successfully authenticated</span></pre>
+    </div>
+
+    <div class="callout callout-success">
+      <div class="callout-header"><span class="callout-icon">&#10003;</span> Done</div>
+      Your SSH key is linked to GitHub. You can download code.
+    </div>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 7: CLONE THE REPO                                      -->
+<!-- ============================================================== -->
+<section id="clone">
+  <div class="step-number">Step 07</div>
+  <h2>Clone the Repo</h2>
+  <p>"Cloning" means downloading the code to your computer. You only do this <strong>once</strong>.</p>
+
+  <p>Run these commands <strong>one at a time</strong>, pressing <code>Enter</code> after each:</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; run each line one at a time</span>
+    </div>
+    <pre><span class="cmt"># Go to your Documents folder</span>
+<span class="prompt">$</span> <span class="cmd">cd ~/Documents</span>
+
+<span class="cmt"># Download the code</span>
+<span class="prompt">$</span> <span class="cmd">git clone https://github.com/coreweave/TopoWeave.git</span>
+<span class="out">Cloning into 'TopoWeave'...</span>
+<span class="out">Receiving objects: 100% ... done.</span>
+
+<span class="cmt"># Go into the folder</span>
+<span class="prompt">$</span> <span class="cmd">cd TopoWeave</span>
+
+<span class="cmt"># Switch to the right branch (this is important!)</span>
+<span class="prompt">$</span> <span class="cmd">git checkout rpatino/cw-node-helper</span>
+<span class="ok">Switched to branch 'rpatino/cw-node-helper'</span></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-header"><span class="callout-icon">&#9432;</span> What just happened?</div>
+    <ul style="margin: 0; padding-left: 1.2rem; color: var(--text);">
+      <li><code>cd ~/Documents</code> &mdash; moved into your Documents folder</li>
+      <li><code>git clone ...</code> &mdash; downloaded all the code into a folder called <code>TopoWeave</code></li>
+      <li><code>cd TopoWeave</code> &mdash; went inside that folder</li>
+      <li><code>git checkout ...</code> &mdash; switched to the branch that has the tool</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> If you see "Permission denied" or "404"</div>
+    You don't have access to the repo yet. Ask your manager or Ricky to add your GitHub username to <strong>coreweave/TopoWeave</strong>.
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 8: .ENV FILE                                            -->
+<!-- ============================================================== -->
+<section id="env">
+  <div class="step-number">Step 08</div>
+  <h2>Create Your .env File</h2>
+  <p>The <code>.env</code> file stores your personal API tokens so the tool can talk to Jira on your behalf. It stays on YOUR machine and is never shared.</p>
+
+  <h3>8a. Copy the template</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; make sure you're in the TopoWeave folder</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">cp .env.example .env</span></pre>
+  </div>
+
+  <h3>8b. Get your Jira API token</h3>
+  <ol class="steps">
+    <li>Open your browser and go to:<br><a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank">id.atlassian.com/manage-profile/security/api-tokens</a></li>
+    <li>Log in with your CoreWeave / Atlassian account if asked.</li>
+    <li>Click the blue <strong>"Create API token"</strong> button.</li>
+    <li>Give it a name. Type <code>cw-node-helper</code> and click <strong>Create</strong>.</li>
+    <li>A popup shows your token. Click the <strong>copy icon</strong> next to it. <strong>Save this somewhere safe</strong> &mdash; you won't see it again!</li>
+  </ol>
+
+  <div class="callout callout-warn">
+    <div class="callout-header"><span class="callout-icon">&#9888;</span> Copy the token NOW</div>
+    Once you close the popup, the token is gone forever. You'll have to create a new one. Paste it somewhere (like Notes) temporarily.
+  </div>
+
+  <h3>8c. Edit the .env file</h3>
+  <p>The easiest way is to open it with TextEdit:</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">open -e .env</span></pre>
+  </div>
+
+  <p>TextEdit opens. You'll see something like this:</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">.env &mdash; replace the placeholder values</span>
+    </div>
+    <pre><span class="cmt"># Required</span>
+JIRA_EMAIL=<span class="err">your.name@coreweave.com</span>        <span class="cmt">&larr; change this to YOUR email</span>
+JIRA_API_TOKEN=<span class="err">paste_your_jira_token_here</span>  <span class="cmt">&larr; paste your token here</span>
+
+<span class="cmt"># Optional (leave as-is if you don't have NetBox)</span>
+NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
+  </div>
+
+  <p>Replace the two red values with your real email and the token you copied. <strong>Example</strong> (not real values):</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">.env &mdash; example with fake values</span>
+    </div>
+    <pre>JIRA_EMAIL=<span class="ok">john.doe@coreweave.com</span>
+JIRA_API_TOKEN=<span class="ok">ATATT3xFfGF0abc123def456ghi789jklmno...</span>
+
+NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
+  </div>
+
+  <p>Save the file (<code>Cmd + S</code>) and close TextEdit.</p>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> Never share your .env file</div>
+    It contains your personal API tokens. Don't send it in Slack, email, or commit it to Git. It's already in <code>.gitignore</code> so Git ignores it automatically.
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 9: RUN THE TOOL                                        -->
+<!-- ============================================================== -->
+<section id="run">
+  <div class="step-number">Step 09</div>
+  <h2>Run the Tool</h2>
+  <p>You're almost there. Run this command:</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal &mdash; make sure you're in the TopoWeave folder</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">source load_env.sh && python3 get_node_context.py</span></pre>
+  </div>
+
+  <p>If everything worked, you'll see the main menu:</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">cw-node-helper</span>
+    </div>
+    <pre>
+  <span class="cmd">1</span>  Lookup ticket     <span class="out">(DO-12345, HO-67890, SDA-111)</span>
+  <span class="cmd">2</span>  Node info         <span class="out">(service tag or hostname -> all tickets)</span>
+  <span class="cmd">3</span>  Browse queue      <span class="out">(DO, HO, or SDA &mdash; by site + status)</span>
+  <span class="cmd">4</span>  My tickets        <span class="out">(DO tickets assigned to you)</span>
+  <span class="cmd">5</span>  Watch queue       <span class="out">(background notifications)</span>
+  <span class="cmd">6</span>  Rack map          <span class="out">(visual location in data hall)</span>
+  <span class="cmd">7</span>  Bookmarks         <span class="out">(manage saved shortcuts)</span>
+
+  <span class="cmd">q</span>  Quit              <span class="cyan">?  Help / Quick Guide</span></pre>
+  </div>
+
+  <div class="callout callout-success">
+    <div class="callout-header"><span class="callout-icon">&#10003;</span> If you see this menu, you're done!</div>
+    Type a number and press Enter to use the tool. Type <code>q</code> to quit. Type <code>?</code> for help.
+  </div>
+
+  <h3>Running it again later</h3>
+  <p>Every time you open a new Terminal window, run:</p>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+<span class="prompt">$</span> <span class="cmd">source load_env.sh && python3 get_node_context.py</span></pre>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 10: STAYING UP TO DATE                                  -->
+<!-- ============================================================== -->
+<section id="update">
+  <div class="step-number">Step 10</div>
+  <h2>Staying Up to Date</h2>
+  <p>When Ricky or someone else pushes updates, you need to "pull" the latest code. There are two ways:</p>
+
+  <h3>Option A: Use the git menu (easiest)</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+<span class="prompt">$</span> <span class="cmd">bash git_menu.sh</span></pre>
+  </div>
+
+  <p>A menu appears. Pick <strong>option 2 (Pull)</strong> to download the latest changes.</p>
+
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">git_menu.sh</span>
+    </div>
+    <pre>  <span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="cyan">┃</span>  <span class="cmd">cw-node-helper   Git  Menu</span>            <span class="cyan">┃</span>
+  <span class="cyan">┃</span>  <span class="out">rpatino/cw-node-helper @ TopoWeave</span>   <span class="cyan">┃</span>
+  <span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+
+  <span class="cmd">1</span>  Push              <span class="out">(stage + test + commit + push)</span>
+  <span class="cmd">2</span>  Pull              <span class="out">(pull latest from GitHub)</span>      <span class="hl">&larr; pick this one</span>
+  <span class="cmd">3</span>  Status            <span class="out">(see what changed)</span>
+  <span class="cmd">q</span>  Quit
+
+  Select [1-7] or q: <span class="hl">2</span></pre>
+  </div>
+
+  <h3>Option B: Manual command</h3>
+  <div class="terminal">
+    <div class="terminal-chrome">
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-dot"></span>
+      <span class="terminal-title">Terminal</span>
+    </div>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+<span class="prompt">$</span> <span class="cmd">git pull origin rpatino/cw-node-helper</span>
+<span class="ok">Already up to date.</span>   <span class="cmt">&larr; or it downloads new files</span></pre>
+  </div>
+</section>
+
+
+<!-- ============================================================== -->
+<!--  STEP 11: TROUBLESHOOTING                                    -->
+<!-- ============================================================== -->
+<section id="troubleshooting">
+  <div class="step-number">Step 11</div>
+  <h2>Troubleshooting</h2>
+  <p>Something broke? Check the table below. Most problems have a one-line fix.</p>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "Permission denied" or "404 Not Found" when cloning</div>
+    You don't have access to the GitHub repo. Ask your manager or Ricky to add your GitHub username to <code>coreweave/TopoWeave</code>. Then try the clone command again.
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "command not found: git"</div>
+    Git isn't installed. Go back to <a href="#homebrew">Step 3 (Homebrew)</a> and <a href="#git">Step 4 (Git)</a>.
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "command not found: python3"</div>
+    Python isn't installed. Go back to <a href="#python">Step 5 (Python)</a>.
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "No module named 'requests'"</div>
+    Run: <code>pip3 install requests</code>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "Error: Jira returned 401 Unauthorized"</div>
+    Your Jira email or API token is wrong. Open <code>.env</code> and double-check:
+    <ul style="margin: 0.5rem 0 0; padding-left: 1.2rem;">
+      <li>No extra spaces around the <code>=</code> signs</li>
+      <li>Email matches your Atlassian/Jira login</li>
+      <li>Token was copied correctly (no missing characters)</li>
+      <li>If the token is old, <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank">create a new one</a></li>
+    </ul>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "fatal: not a git repository"</div>
+    You're in the wrong folder. Run: <code>cd ~/Documents/TopoWeave</code>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "error: pathspec 'rpatino/cw-node-helper' did not match"</div>
+    The branch hasn't been fetched yet. Run: <code>git fetch origin</code> and then try <code>git checkout rpatino/cw-node-helper</code> again.
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-header"><span class="callout-icon">&#9888;</span> Still stuck?</div>
+    Ask Ricky. Send him a screenshot of the error in Terminal &mdash; that helps a lot.
+  </div>
+</section>
+
+
+</main>
+
+<footer>
+  <div class="wrap">
+    cw-node-helper &mdash; questions? ask Ricky
+  </div>
+</footer>
+
+<!-- ============================================================== -->
+<!--  SCRIPTS                                                       -->
+<!-- ============================================================== -->
+<script>
+// Nav scroll effect
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 20);
+});
+
+// Progress bar
+const progressBar = document.getElementById('progressBar');
+window.addEventListener('scroll', () => {
+  const h = document.documentElement.scrollHeight - window.innerHeight;
+  const pct = h > 0 ? (window.scrollY / h) * 100 : 0;
+  progressBar.style.height = pct + '%';
+});
+
+// Tab switching
+document.querySelectorAll('.option-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const group = tab.closest('.option-tabs').dataset.group;
+    const target = tab.dataset.tab;
+    // Deactivate all tabs + panels in this group
+    document.querySelectorAll(`.option-tabs[data-group="${group}"] .option-tab`).forEach(t => t.classList.remove('active'));
+    document.querySelectorAll(`.option-panel[data-group="${group}"]`).forEach(p => p.classList.remove('active'));
+    // Activate clicked
+    tab.classList.add('active');
+    document.querySelector(`.option-panel[data-panel="${target}"][data-group="${group}"]`).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>
