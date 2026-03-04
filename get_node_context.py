@@ -2169,8 +2169,10 @@ def _build_ai_context(ctx: dict) -> str:
 
     # Diagnostic links
     diags = ctx.get("diag_links", [])
-    if diags:
+    if diags or ctx.get("service_tag"):
         lines.append(f"\nDIAGNOSTIC LINKS:")
+        if ctx.get("service_tag"):
+            lines.append(f"  Fleet Diags: https://fleetops-storage.cwobject.com/diags/{ctx['service_tag']}/index.html")
         for d in diags:
             lines.append(f"  {d.get('label', '?')}: {d.get('url', '?')}")
 
@@ -5479,6 +5481,8 @@ def _print_action_panel(ctx: dict):
         open_items.append(btn("t", "Remote Console (BMC)", MAGENTA))
     if ctx.get("ho_context"):
         open_items.append(btn("o", f"View {ctx['ho_context']['key']}", MAGENTA))
+    if ctx.get("service_tag"):
+        open_items.append(btn("fd", "Fleet Diags", YELLOW))
     if open_items:
         print(f"  {BOLD}{WHITE}Open{RESET}")
     print(f"    {'   '.join(open_items)}")
@@ -6042,6 +6046,14 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                     raw = ""
                 if raw == "y":
                     webbrowser.open(url)
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
+        if choice == "fd" and ctx and ctx.get("service_tag"):
+            tag = ctx["service_tag"]
+            url = f"https://fleetops-storage.cwobject.com/diags/{tag}/index.html"
+            print(f"  {DIM}Opening Fleet Diags for {tag}...{RESET}")
+            webbrowser.open(url)
             _clear_screen()
             _print_pretty(ctx)
             continue
