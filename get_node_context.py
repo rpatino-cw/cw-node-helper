@@ -7893,6 +7893,25 @@ def _print_pretty(ctx: dict):
             continue  # hide rows with no data
         print(f"  {label:<14} {CYAN}{value}{RESET}")
 
+    # Parsed location breakdown (from rack_location or hostname)
+    _parsed = _parse_rack_location(ctx.get("rack_location", ""))
+    if _parsed:
+        _loc_parts = []
+        if _parsed.get("dh"):
+            _loc_parts.append(f"Data Hall  {CYAN}{_parsed['dh']}{RESET}")
+        if _parsed.get("rack") is not None:
+            _loc_parts.append(f"Rack #  {CYAN}{_parsed['rack']}{RESET}")
+        if _parsed.get("ru"):
+            _loc_parts.append(f"RU  {CYAN}{_parsed['ru']}{RESET}")
+        # Extract node position from hostname (e.g. dh1-r244-node-08-us-central-07a → 08)
+        _hn = ctx.get("hostname", "")
+        _node_match = re.search(r'-node-(\d+)-', _hn)
+        if _node_match:
+            _loc_parts.append(f"Node  {CYAN}{_node_match.group(1)}{RESET}")
+        if _loc_parts:
+            print(f"  {DIM}{'─' * 50}{RESET}")
+            print(f"  {DIM}Location:{RESET}  {'  │  '.join(_loc_parts)}")
+
     # RMA reason + node name
     if ctx.get("rma_reason") or ctx.get("node_name"):
         print(f"  {DIM}{line}{RESET}")
