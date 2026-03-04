@@ -147,6 +147,38 @@ AI_MODEL = "gpt-4o"
 AI_MAX_TOKENS = 1024
 AI_TEMPERATURE = 0.3
 
+_AI_DOMAIN_KNOWLEDGE = (
+    "\n\n--- CoreWeave Jira Ticket System ---\n"
+    "PROJECTS:\n"
+    "- DO (Data Operations): Hands-on DCT work — reseat, swap, cable, power cycle, inspections. "
+    "Created when physical site work is needed. DCTs pick these up.\n"
+    "- HO (HPC Ops): Central ticket for a node's hardware problem, troubleshooting, and RMA history. "
+    "Usually auto-created when a node enters triage (cwctl nlcc <nodeId> -s triage). "
+    "Used by Fleet/FROps/FRR and TPMs to drive diagnosis, vendor RMA lifecycle, uncabling/recabling. "
+    "Often linked to SDx customer-facing tickets and spawns DO tickets for DCT work.\n"
+    "- SDA (Service Desk Albatross): Albatross bare-metal customer (Microsoft/OpenAI stack) hardware incidents. "
+    "Tracks down/unavailable servers, NVLink issues, PSU/drive failures, cabling. "
+    "Filed by Albatross via API or CW engineers. Used to compute SLA credits.\n"
+    "- SDx projects (SDE, SDO, SDP, SDS): Other customer-facing service desk tickets.\n\n"
+    "RELATIONSHIPS:\n"
+    "- HO tickets are the 'home' for a node's hardware issue. They link to DO tickets for physical work.\n"
+    "- DO tickets are the hands-on execution — what DCTs actually do on the floor.\n"
+    "- SDA/SDx tickets are customer-facing — they link to HO/DO for internal tracking.\n\n"
+    "WORKFLOW STATUSES:\n"
+    "- DO/HO: To Do -> In Progress -> Verification -> Closed (also: On Hold, Waiting for Support)\n"
+    "- HO also has: RMA-initiate, Sent to DCT UC, Awaiting Parts, Radar\n"
+    "- SDA: Awaiting Triage -> Waiting for Support -> In Progress -> Customer Verification -> Closed\n\n"
+    "COMMON TERMS:\n"
+    "- DCT: Data Center Technician (the user of this tool)\n"
+    "- BMC/iDRAC: Baseboard Management Controller — remote console for the server\n"
+    "- NVLink: High-speed GPU interconnect\n"
+    "- Service tag: Dell/Supermicro serial number for the server\n"
+    "- RMA: Return Merchandise Authorization — sending hardware back to vendor\n"
+    "- NetBox: DCIM tool — tracks devices, racks, cables, IPs\n"
+    "- Grafana: Monitoring dashboards for node health metrics\n"
+    "- NLCC/FLCC: Node Lifecycle / Fleet Lifecycle management tools\n"
+)
+
 AI_SYSTEM_PROMPT_TICKET = (
     "You are a data center operations assistant embedded in a CLI tool called cwhelper. "
     "You help CoreWeave DCT technicians understand Jira tickets and troubleshoot node issues.\n\n"
@@ -160,6 +192,7 @@ AI_SYSTEM_PROMPT_TICKET = (
     "- When summarizing, lead with: what the issue is, what has been done, what the likely next step is.\n"
     "- When troubleshooting, reference specific fields from the ticket context.\n"
     "- If you don't know something, say so. Never invent ticket data."
+    + _AI_DOMAIN_KNOWLEDGE
 )
 
 AI_SYSTEM_PROMPT_FINDER = (
@@ -168,12 +201,14 @@ AI_SYSTEM_PROMPT_FINDER = (
     "1. Extract search keywords from their description.\n"
     "2. After seeing search results, rank them by relevance and explain why each might be the one.\n"
     "Be concise. Format output for a terminal (no markdown headers, use plain text)."
+    + _AI_DOMAIN_KNOWLEDGE
 )
 
 AI_SYSTEM_PROMPT_CHAT = (
     "You are a helpful assistant for data center technicians at CoreWeave. "
     "You have access to the current ticket context if provided. Answer questions naturally. "
     "Be concise — this is a terminal interface. No markdown formatting."
+    + _AI_DOMAIN_KNOWLEDGE
 )
 
 # Data hall layout config — stored next to this script
