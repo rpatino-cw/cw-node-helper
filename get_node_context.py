@@ -2172,10 +2172,50 @@ def _ai_chat_loop(ctx: dict = None, queue_info: str = "",
         context_text = ""
         label = "general"
 
+    # Build user state context (recent tickets, last viewed, bookmarks)
+    state_lines = []
+    try:
+        state = _load_user_state()
+        last = state.get("last_ticket")
+        if last:
+            last_summary = ""
+            for r in state.get("recent_tickets", []):
+                if r.get("key") == last:
+                    last_summary = f" — {r.get('summary', '')}"
+                    break
+            state_lines.append(f"LAST VIEWED: {last}{last_summary}")
+        recents = state.get("recent_tickets", [])
+        if recents:
+            state_lines.append("RECENT TICKETS:")
+            for r in recents[:5]:
+                assignee = f" (assigned: {r['assignee']})" if r.get("assignee") else ""
+                state_lines.append(f"  {r.get('key', '?')} — {r.get('summary', '?')}{assignee}")
+        recent_nodes = state.get("recent_nodes", [])
+        if recent_nodes:
+            state_lines.append("RECENT NODES:")
+            for n in recent_nodes[:5]:
+                state_lines.append(f"  {n.get('term', '?')} — {n.get('hostname', '?')} @ {n.get('site', '?')}")
+        bookmarks = state.get("bookmarks", [])
+        if bookmarks:
+            state_lines.append("BOOKMARKS:")
+            for bm in bookmarks:
+                state_lines.append(f"  {bm.get('label', '?')}")
+    except Exception:
+        pass
+
+    state_context = "\n".join(state_lines) if state_lines else ""
+    if state_context and not context_text:
+        context_text = state_context
+    elif state_context and context_text:
+        context_text = context_text + "\n\n" + state_context
+
     # Add ticket lookup awareness to system prompt
     enhanced_system = system + (
-        "\n\nYou can help find tickets. If the user describes a ticket they're looking for, "
-        "suggest they type 'find' followed by keywords, or type a ticket key like DO-12345 to load it directly."
+        "\n\nYou have access to the user's recent tickets, bookmarks, and last viewed ticket. "
+        "When they say 'open my last ticket' or 'go back to that ticket', reference the LAST VIEWED ticket from the context. "
+        "Tell them the ticket key so they can type it to load it. "
+        "You can also help find tickets — suggest they type 'find' followed by keywords, "
+        "or type a ticket key like DO-12345 to load it directly."
     )
 
     messages = [{"role": "system", "content": enhanced_system}]
