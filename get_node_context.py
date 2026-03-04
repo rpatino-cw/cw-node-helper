@@ -1259,6 +1259,7 @@ def _extract_description_details(fields: dict) -> dict:
                 if mark.get("type") == "link":
                     href = mark.get("attrs", {}).get("href", "")
                     if href:
+                        href = html_mod.unescape(href)  # Fix &amp; → & etc.
                         # Derive a short label from the URL filename
                         filename = href.rstrip("/").rsplit("/", 1)[-1]
                         diag_links.append({"label": filename, "url": href})
