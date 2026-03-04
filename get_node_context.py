@@ -304,6 +304,10 @@ _ANIMATE = os.environ.get("CWHELPER_ANIMATE", "1") != "0"
 # AI toggle — on by default if configured, user can toggle with "ai off"/"ai on"
 _AI_ENABLED = True
 
+# ntfy.sh push notifications (set topic in .env, toggle with "ntfy off"/"ntfy on")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+_NTFY_ENABLED = True
+
 # IB topology lookup (loaded from ib_topology.json once)
 _IB_TOPO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ib_topology.json")
 _ib_topo: dict | None = None
@@ -3022,6 +3026,24 @@ def _macos_notify(title: str, subtitle: str, message: str):
         pass
 
 
+def _ntfy_send(title: str, message: str, priority: str = "default", tags: str = ""):
+    """Send push notification via ntfy.sh. Silent no-op if not configured."""
+    if not _NTFY_ENABLED or not NTFY_TOPIC:
+        return
+    try:
+        headers = {"Title": title, "Priority": priority}
+        if tags:
+            headers["Tags"] = tags
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            headers=headers,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def _watcher_wait(interval: int, has_new: bool) -> str | None:
     """Wait for `interval` seconds, but let the user type a ticket key anytime.
 
@@ -3104,6 +3126,9 @@ def _run_queue_watcher(email: str, token: str, site: str,
                                 _macos_notify("CW Node Helper",
                                               "Weekend auto-assign",
                                               f"{a['key']} -> {a['assigned_to']}")
+                                _ntfy_send("Auto-Assign",
+                                           f"{a['key']} assigned",
+                                           tags="robot")
                             new_keys = new_keys - assigned_keys
 
                     # macOS notification
@@ -3116,6 +3141,9 @@ def _run_queue_watcher(email: str, token: str, site: str,
                     if count > 1:
                         msg += f" (+{count - 1} more)"
                     _macos_notify("CW Node Helper", f"{site} queue", msg)
+                    _ntfy_send("Queue Update",
+                               f"{count} new ticket{'s' if count > 1 else ''} in {site} queue",
+                               tags="inbox_tray")
 
                     # Show grab card for each new ticket
                     for key in sorted(new_keys):
@@ -3370,6 +3398,10 @@ def _background_watcher_loop(email: str, token: str, site: str,
                             _macos_notify("CW Node Helper",
                                           f"New {project} ticket",
                                           f"{key} {tag} {summary}")
+                            _ntfy_send(f"New {project} Ticket",
+                                       f"{key} ({site})" if site else key,
+                                       priority="high",
+                                       tags="rotating_light")
                 known_keys = current_keys
         except Exception:
             pass  # silently retry next interval
@@ -3604,32 +3636,37 @@ def _print_connections_inline(ctx: dict):
 
     # Footer with NetBox cable link hint
     has_cables = any(i.get("cable_id") for i in all_ifaces)
+    ai_hint = f"  {DIM}\u2502  'ai' to chat about connections{RESET}" if _ai_available() else ""
     print(f"\n  {DIM}{len(all_ifaces)} connections{RESET}", end="")
     if has_cables:
-        print(f"  {DIM}\u2502  Type # to open cable in NetBox{RESET}")
+        print(f"  {DIM}\u2502  Type # to open cable in NetBox{RESET}{ai_hint}")
     else:
-        print()
+        print(ai_hint)
 
-    # Interactive: let user open a cable in NetBox, then clear+reprint
-    if has_cables:
-        try:
-            raw = input(f"\n  > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if raw.isdigit():
-            idx = int(raw) - 1
-            if 0 <= idx < len(all_ifaces):
-                cable_id = all_ifaces[idx].get("cable_id")
-                if cable_id:
-                    api_base = os.environ.get("NETBOX_API_URL", "").strip().rstrip("/")
-                    nb_base = api_base.rsplit("/api", 1)[0] if "/api" in api_base else api_base
-                    url = f"{nb_base}/dcim/cables/{cable_id}/"
-                    print(f"  {DIM}Opening {url}{RESET}")
-                    webbrowser.open(url)
-        # After interaction, clear and reprint ticket info
-        _clear_screen()
-        _print_pretty(ctx)
+    # Interactive: let user open a cable in NetBox or chat with AI
+    try:
+        raw = input(f"\n  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if raw.lower() == "ai" or raw.lower().startswith("ai "):
+        initial = raw[3:].strip() if raw.lower().startswith("ai ") else ""
+        email = os.environ.get("JIRA_EMAIL", "")
+        token = os.environ.get("JIRA_API_TOKEN", "")
+        _ai_dispatch(ctx=ctx, email=email, token=token, initial_msg=initial)
+    elif raw.isdigit() and has_cables:
+        idx = int(raw) - 1
+        if 0 <= idx < len(all_ifaces):
+            cable_id = all_ifaces[idx].get("cable_id")
+            if cable_id:
+                api_base = os.environ.get("NETBOX_API_URL", "").strip().rstrip("/")
+                nb_base = api_base.rsplit("/api", 1)[0] if "/api" in api_base else api_base
+                url = f"{nb_base}/dcim/cables/{cable_id}/"
+                print(f"  {DIM}Opening {url}{RESET}")
+                webbrowser.open(url)
+    # After interaction, clear and reprint ticket info
+    _clear_screen()
+    _print_pretty(ctx)
     print()
 
 
@@ -6462,7 +6499,7 @@ def _ask_queue_filters(prompt_site: bool = True, project: str = "DO") -> dict | 
 
 def _interactive_menu():
     """Main interactive loop. Keeps running until user quits."""
-    global _AI_ENABLED
+    global _AI_ENABLED, _NTFY_ENABLED
     email, token = _get_credentials()
 
     # Pre-warm user identity in background (for greeting + "my tickets")
@@ -6628,6 +6665,19 @@ def _interactive_menu():
         if choice == "ai off":
             _AI_ENABLED = False
             print(f"\n  {YELLOW}AI disabled.{RESET}")
+            _brief_pause(1)
+            continue
+        # --- ntfy.sh toggle ------------------------------------------------
+        if choice == "ntfy on":
+            _NTFY_ENABLED = True
+            print(f"\n  {GREEN}ntfy.sh notifications enabled.{RESET}")
+            if not NTFY_TOPIC:
+                print(f"  {YELLOW}Set NTFY_TOPIC in .env to receive alerts.{RESET}")
+            _brief_pause(1)
+            continue
+        if choice == "ntfy off":
+            _NTFY_ENABLED = False
+            print(f"\n  {YELLOW}ntfy.sh notifications disabled.{RESET}")
             _brief_pause(1)
             continue
         # --- AI chat (explicit) --------------------------------------------
