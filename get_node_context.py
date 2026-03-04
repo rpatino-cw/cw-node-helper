@@ -2195,10 +2195,17 @@ def _build_ai_context(ctx: dict) -> str:
                 remaining = ongoing.get("remainingTime", {}).get("friendly", "?")
                 lines.append(f"  {name}: {'BREACHED' if breached else remaining}")
 
+    # Fleet diag logs (if fetched and attached to ctx)
+    fleet_logs = ctx.get("_fleet_diag_logs")
+    if fleet_logs:
+        lines.append(f"\nFLEET DIAGNOSTIC LOGS:")
+        lines.append(fleet_logs)
+
     result = "\n".join(lines)
-    # Increased cap for thorough troubleshooting context
-    if len(result) > 20000:
-        result = result[:19997] + "..."
+    # Increased cap — larger when logs are included
+    max_cap = 40000 if fleet_logs else 20000
+    if len(result) > max_cap:
+        result = result[:max_cap - 3] + "..."
     return result
 
 
@@ -3610,26 +3617,37 @@ def _trace_connection(ctx: dict, iface: dict):
         return
 
     # Parse hops into a flat list of endpoints
-    # NetBox trace returns [[near_end, cable, far_end], ...]
+    # NetBox trace returns [[near_ends, cable, far_ends], ...]
+    # Each end can be a list of terminations or a single dict
+    def _pick_termination(end):
+        """Extract a single termination dict from a trace endpoint."""
+        if isinstance(end, list):
+            return end[0] if end else None
+        if isinstance(end, dict):
+            return end
+        return None
+
     endpoints = []
     for segment in hops:
         if not isinstance(segment, list) or len(segment) < 3:
             continue
-        near, cable, far = segment[0], segment[1], segment[2]
-        if not endpoints:
+        near = _pick_termination(segment[0])
+        cable = segment[1] if isinstance(segment[1], dict) else {}
+        far = _pick_termination(segment[2])
+        if not endpoints and near:
             # First segment — include the near end (our interface)
-            dev = near.get("device", {}) if near else {}
+            dev = near.get("device", {}) or {}
             endpoints.append({
                 "device": dev.get("display") or dev.get("name") or "?",
                 "port": near.get("display") or near.get("name") or "?",
-                "rack": dev.get("rack", {}).get("display") if dev.get("rack") else None,
+                "rack": (dev.get("rack") or {}).get("display"),
                 "position": dev.get("position"),
-                "cable_id": cable.get("id") if cable else None,
-                "cable_label": cable.get("label") or cable.get("display") if cable else None,
+                "cable_id": cable.get("id"),
+                "cable_label": cable.get("label") or cable.get("display"),
             })
         # Always include the far end
         if far:
-            dev = far.get("device", {}) if far else {}
+            dev = far.get("device", {}) or {}
             endpoints.append({
                 "device": dev.get("display") or dev.get("name") or "?",
                 "port": far.get("display") or far.get("name") or "?",
@@ -6051,9 +6069,107 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             continue
         if choice == "fd" and ctx and ctx.get("service_tag"):
             tag = ctx["service_tag"]
-            url = f"https://fleetops-storage.cwobject.com/diags/{tag}/index.html"
-            print(f"  {DIM}Opening Fleet Diags for {tag}...{RESET}")
-            webbrowser.open(url)
+            base_url = f"https://fleetops-storage.cwobject.com/diags/{tag}"
+            print(f"\n  {DIM}Fetching Fleet Diags for {tag}...{RESET}")
+            try:
+                resp = _session.get(f"{base_url}/index.html", timeout=(5, 15))
+                if resp.ok:
+                    # Parse log URLs from HTML
+                    import html.parser
+                    _fd_links = []
+                    class _LinkParser(html.parser.HTMLParser):
+                        _cur_row = {}
+                        _in_td = False
+                        _td_count = 0
+                        def handle_starttag(self, tag, attrs):
+                            if tag == "tr":
+                                self._cur_row = {}
+                                self._td_count = 0
+                            elif tag == "td":
+                                self._in_td = True
+                                self._td_count += 1
+                            elif tag == "a":
+                                for k, v in attrs:
+                                    if k == "href" and v and v != f"{base_url}/index.html":
+                                        self._cur_row["url"] = v
+                        def handle_data(self, data):
+                            if self._in_td:
+                                d = data.strip()
+                                if self._td_count == 1 and d:
+                                    self._cur_row["time"] = d
+                                elif self._td_count == 2 and d:
+                                    self._cur_row["mode"] = d
+                        def handle_endtag(self, tag):
+                            if tag == "td":
+                                self._in_td = False
+                            elif tag == "tr" and self._cur_row.get("url"):
+                                _fd_links.append(dict(self._cur_row))
+                    _LinkParser().feed(resp.text)
+
+                    if _fd_links:
+                        print(f"\n  {BOLD}Fleet Diags — {tag}{RESET}  {DIM}({len(_fd_links)} logs){RESET}\n")
+                        for i, lg in enumerate(_fd_links[:25], 1):
+                            fname = lg["url"].rsplit("/", 1)[-1]
+                            mode = lg.get("mode", "")
+                            mode_str = f" {DIM}[{mode}]{RESET}" if mode else ""
+                            time_str = f"{DIM}{lg.get('time', '')}{RESET}"
+                            print(f"  {BOLD}{i:>2}.{RESET}  {CYAN}{fname:<50}{RESET} {time_str}{mode_str}")
+                        print(f"\n  {DIM}[#] open in browser  [ai] analyze with AI  [ENTER] back{RESET}")
+                        try:
+                            fd_pick = input("  > ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            fd_pick = ""
+                        if fd_pick.isdigit():
+                            idx = int(fd_pick) - 1
+                            if 0 <= idx < len(_fd_links):
+                                webbrowser.open(_fd_links[idx]["url"])
+                        elif fd_pick.lower() == "ai" or fd_pick.lower().startswith("ai "):
+                            # Fetch the most useful text logs and send to AI
+                            print(f"\n  {DIM}Fetching key logs for AI analysis...{RESET}")
+                            log_text = []
+                            # Prioritize: sel.log, dmesg.log, alert_history, firmware_versions, nvidia_smi
+                            priority_names = ["sel.log", "dmesg.log", "alert_history.yaml",
+                                              "firmware_versions.yaml", "nvidia_smi_q.txt",
+                                              "nvidia_smi_nvlink.txt"]
+                            fetched = 0
+                            for pname in priority_names:
+                                for lg in _fd_links:
+                                    if lg["url"].endswith(pname) and fetched < 4:
+                                        try:
+                                            lr = _session.get(lg["url"], timeout=(5, 15))
+                                            if lr.ok and len(lr.text) < 15000:
+                                                log_text.append(f"\n--- {pname} ---\n{lr.text}")
+                                                fetched += 1
+                                                print(f"    {GREEN}Fetched {pname}{RESET}")
+                                            elif lr.ok:
+                                                # Truncate large logs
+                                                log_text.append(f"\n--- {pname} (truncated) ---\n{lr.text[:10000]}")
+                                                fetched += 1
+                                                print(f"    {GREEN}Fetched {pname} (truncated){RESET}")
+                                        except Exception:
+                                            pass
+                                        break
+                            if log_text:
+                                initial = fd_pick[3:].strip() if fd_pick.lower().startswith("ai ") else "Analyze these diagnostic logs. What's wrong with this node?"
+                                # Temporarily augment ctx with log data
+                                ctx["_fleet_diag_logs"] = "\n".join(log_text)
+                                _ai_dispatch(ctx=ctx, email=email or "", token=token or "",
+                                             initial_msg=initial)
+                                ctx.pop("_fleet_diag_logs", None)
+                            else:
+                                print(f"  {YELLOW}Could not fetch any text logs.{RESET}")
+                    else:
+                        print(f"  {YELLOW}No logs found for {tag}.{RESET}")
+                        print(f"  {DIM}Opening in browser instead...{RESET}")
+                        webbrowser.open(f"{base_url}/index.html")
+                else:
+                    print(f"  {YELLOW}Could not fetch diags (HTTP {resp.status_code}).{RESET}")
+                    print(f"  {DIM}Opening in browser...{RESET}")
+                    webbrowser.open(f"{base_url}/index.html")
+            except Exception as e:
+                print(f"  {YELLOW}Could not fetch diags: {e}{RESET}")
+                print(f"  {DIM}Opening in browser...{RESET}")
+                webbrowser.open(f"{base_url}/index.html")
             _clear_screen()
             _print_pretty(ctx)
             continue
