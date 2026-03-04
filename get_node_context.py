@@ -2745,6 +2745,7 @@ def _run_queue_interactive(email: str, token: str, site: str,
     """
     mine_label = " (my tickets)" if mine_only else ""
     filter_label = f"  {DIM}filter: {status_filter}{RESET}" if status_filter != "open" else ""
+    _q_first = True
 
     while True:
         _clear_screen()
@@ -2752,7 +2753,9 @@ def _run_queue_interactive(email: str, token: str, site: str,
         print(f"\n  {BOLD}{project} queue for {site or 'all sites'}{mine_label}{RESET}  ({_count_hint}){filter_label}\n")
 
         issues = _search_queue(site, email, token, mine_only=mine_only, limit=limit,
-                               status_filter=status_filter, project=project)
+                               status_filter=status_filter, project=project,
+                               use_cache=_q_first)
+        _q_first = False
 
         # Record this queue view for suggestions
         if issues:
@@ -2928,7 +2931,7 @@ def _run_queue_interactive(email: str, token: str, site: str,
 # ---------------------------------------------------------------------------
 
 def _search_node_history(identifier: str, email: str, token: str,
-                         limit: int = 20) -> list:
+                         limit: int = 20, use_cache: bool = True) -> list:
     """Find all DO + HO tickets for a service tag or hostname.
 
     JQL searches across:
@@ -2946,7 +2949,7 @@ def _search_node_history(identifier: str, email: str, token: str,
         f'ORDER BY created DESC'
     )
     return _jql_search(
-        jql, email, token, max_results=limit,
+        jql, email, token, max_results=limit, use_cache=use_cache,
         fields=[
             "key", "summary", "status", "issuetype", "created",
             "customfield_10193",   # service_tag
@@ -2964,11 +2967,14 @@ def _run_history_interactive(email: str, token: str, identifier: str,
     Returns "quit" or "menu" to propagate upward. "back" is handled
     internally by re-displaying the history list.
     """
+    _first_load = True
     while True:
         _clear_screen()
         print(f"\n  {BOLD}Node history for '{identifier}'{RESET}  (limit {limit})\n")
 
-        issues = _search_node_history(identifier, email, token, limit=limit)
+        issues = _search_node_history(identifier, email, token, limit=limit,
+                                       use_cache=_first_load)
+        _first_load = False  # subsequent refreshes bypass cache
 
         if not issues:
             print(f"  {YELLOW}{BOLD}No tickets{RESET} {DIM}found for '{identifier}'.{RESET}")
