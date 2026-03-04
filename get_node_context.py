@@ -6390,8 +6390,8 @@ def _interactive_menu():
   {BOLD}7{RESET}  Bookmarks         {DIM}(manage saved shortcuts){RESET}
 
   {BOLD}v{RESET}  Stale verifications {DIM}(>48h in Verification){RESET}
-  {BOLD}q{RESET}  Quit              {CYAN}{BOLD}?{RESET}  Help / Quick Guide"""
-        + (f"\n  {CYAN}{BOLD}ai{RESET} {'on' if _AI_ENABLED else 'off'}               {DIM}(type anything to chat — 'ai off' to disable){RESET}" if _ai_available() else "")
+  {BOLD}q{RESET}  Quit   {CYAN}{BOLD}?{RESET} Help"""
+        + (f"   {CYAN}{BOLD}ai{RESET} {'on' if _AI_ENABLED else 'off'} {DIM}— type anything to chat{RESET}" if _ai_available() else "")
         )
 
         # --- Bookmark shortcuts (a-e) ---
