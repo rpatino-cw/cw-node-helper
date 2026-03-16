@@ -48,20 +48,69 @@ source/                  # Reference Excel cutsheets (gitignored)
 .github/workflows/       # CI (test on push) + release (tag → zip)
 ```
 
-## Code Layout (get_node_context.py)
+## Package Layout (cwhelper/)
 
-| Lines (approx) | Section |
-|-----------------|---------|
-| 1–140 | Constants, globals, ANSI colors, feature flags |
-| 141–590 | Utilities, auth, Jira API (`_jira_get/post/put`) |
-| 591–840 | NetBox API (`_netbox_get`, `_netbox_find_device`) |
-| 841–1160 | Data extraction, JQL search, context building |
-| 1161–1690 | Queue browser, history search, background watcher |
-| 1691–2640 | Display, action panel, rack neighbors, bookmarks |
-| 2641–2980 | Ticket detail hotkeys |
-| 2981–3720 | Interactive menu (main loop) |
-| 3721–4020 | Rack visualization (ASCII maps) |
-| 4021–4650 | Output formats, CLI entry (`main()`) |
+`get_node_context.py` is now a backward-compat shim. All code lives in the `cwhelper/` package.
+
+```
+cwhelper/
+  config.py         (~475)  constants, globals, ANSI colors, feature flags, radar statuses
+  cache.py          (~147)  TTL cache, JQL escape, IB topology lookup
+  state.py          (~245)  .cwhelper_state.json read/write
+  cli.py            (~267)  argparse + main() entry point
+  clients/
+    jira.py         (~503)  Jira Cloud REST API
+    netbox.py       (~377)  NetBox API
+    grafana.py       (~82)  Grafana URL generation only
+  services/
+    ai.py           (~874)  Claude/OpenAI AI features
+    bookmarks.py    (~278)  bookmark CRUD
+    brief.py        (~392)  AI shift brief with radar HO integration
+    context.py      (~890)  ticket context building, field extraction, prep brief
+    notifications.py(~128)  ntfy push notifications
+    queue.py        (~678)  queue browser, stale verification
+    rack.py        (~1088)  rack ASCII visualization, DH maps
+    radar.py        (~225)  HO radar dashboard — pre-DO awareness
+    search.py       (~209)  JQL search, history search
+    session_log.py  (~549)  session event logging
+    walkthrough.py (~1415)  data hall walkthrough mode (candidate for sub-package)
+    watcher.py      (~660)  background ticket + HO radar watcher threads
+    weekend.py      (~151)  weekend auto-assign logic
+  tui/
+    actions.py      (~600)  action panel + ticket detail hotkey loop
+    cab_view.py     (~115)  cabinet rack view (_run_cab_view)
+    connection_view.py(~270) HO/MRB/SDx lookups, network cable display
+    display.py      (~650)  core screen utils, ticket pretty-print
+    menu.py         (~966)  main interactive menu loop
+    rack_helpers.py (~270)  rack conflict checks, bulk grab/hold/link
+    rich_console.py (~521)  shared Rich console instance
+```
+
+## Layer Architecture
+
+```
+cli.py → tui/menu.py → tui/actions.py
+                     → services/queue.py
+                     → services/walkthrough.py
+tui/actions.py       → tui/rack_helpers.py  (rack conflict logic)
+                     → tui/cab_view.py       (cabinet view)
+                     → tui/connection_view.py (HO/MRB/SDx/cable display)
+                     → services/*            (business logic)
+                     → clients/*             (API calls)
+tui/display.py       ← imported by most tui + service modules
+clients/*            ← leaf layer, no imports from tui or services
+```
+
+## Display Layer
+
+All TUI rendering uses **Python Rich** (`cwhelper/tui/rich_console.py`). Do not use raw ANSI print statements for new display code.
+
+- Use `console` (the shared `Console` instance from `rich_console.py`) for all output
+- Follow **POSIX CLI conventions** and **keyboard-driven navigation** throughout
+- Ticket detail header answers the 3 DCT questions in order: **Where → What to do → Which device**
+- New menus: use `_rich_print_menu()` with options as `list[tuple[key, label, hint]]`
+- New queue displays: use `_rich_print_queue_table()` + `_rich_queue_prompt()`
+- Status styles: use `_rich_status(status_name)` → returns `(style, dot_char)`
 
 ## Conventions
 
@@ -90,3 +139,31 @@ source/                  # Reference Excel cutsheets (gitignored)
 - `.env` / `.env.local` — credentials
 - `.cwhelper_state.json` — personal state
 - `source/` — large Excel binaries
+
+## Good Practice Feedback
+
+Claude will flag good or bad practices as they come up during development. Feedback will appear inline as a short note before or after the relevant change.
+
+### Format
+
+> **Practice:** [Good / Caution / Bad]
+> **What:** Brief description of what was done
+> **Why:** Why it matters in this codebase or generally
+> **Advice:** What to do instead (if applicable)
+
+### Standing Rules for This Project
+
+**Good practices to reinforce:**
+- Mocking all API calls in tests — keeps tests fast and offline-safe
+- Using `_private_prefix` for internal functions — consistent with project convention
+- Caching API responses with TTL — reduces rate limit risk on Jira/NetBox
+- Graceful degradation (Jira-only mode when NetBox is down) — resilient for ops use
+- Keeping credentials in `.env` and gitignored — never hardcoded
+
+**Practices to flag:**
+- Hardcoding ticket IDs, URLs, or credentials anywhere in the code
+- Adding real API calls inside test files
+- Raising unhandled exceptions to the user (tracebacks)
+- Growing `get_node_context.py` with unrelated logic — consider if a new module is warranted
+- Committing state files like `.cwhelper_state.json` or `dh_layouts.json`
+- Skipping `.env.example` updates when new env vars are added
