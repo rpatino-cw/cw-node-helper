@@ -15,7 +15,13 @@ build/
 
 # App state (user-specific, not shareable)
 .cwhelper_state.json
+.cwhelper_session.json
+.devhub.json
+bookmark_*.json
 dh_layouts.json
+
+# Virtual environment
+.venv/
 
 # Source data (Excel cutsheets — large binaries, not for version control)
 source/
@@ -28,3 +34,7 @@ source/
 *~
 .DS_Store
 .claude/
+*.db
+state.db
+reports/
+data/
