@@ -23,6 +23,9 @@ _mock_requests.Session.return_value = MagicMock()
 sys.modules.setdefault("requests", _mock_requests)
 
 import get_node_context as gnc  # noqa: E402
+import cwhelper.config as _cfg  # noqa: E402
+import cwhelper.services.notifications as _notif  # noqa: E402
+import cwhelper.tui.actions as _actions  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,18 +34,18 @@ import get_node_context as gnc  # noqa: E402
 def _capture_panel(ctx: dict, display_name: str = None, account_id: str = None,
                    bookmarks: list = None) -> str:
     """Run _print_action_panel and return everything it printed."""
-    old_dn, old_aid = gnc._my_display_name, gnc._my_account_id
-    gnc._my_display_name = display_name
-    gnc._my_account_id = account_id
+    old_dn, old_aid = _cfg._my_display_name, _cfg._my_account_id
+    _cfg._my_display_name = display_name
+    _cfg._my_account_id = account_id
+    import cwhelper.tui.actions as _act
     mock_state = {"bookmarks": bookmarks or []}
     try:
         buf = io.StringIO()
-        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(" ".join(str(x) for x in a) + "\n")), \
-             patch.object(gnc, "_load_user_state", return_value=mock_state):
-            gnc._print_action_panel(ctx)
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(" ".join(str(x) for x in a) + "\n")):
+            gnc._print_action_panel(ctx, state=mock_state)
         return buf.getvalue()
     finally:
-        gnc._my_display_name, gnc._my_account_id = old_dn, old_aid
+        _cfg._my_display_name, _cfg._my_account_id = old_dn, old_aid
 
 
 def _strip_ansi(text: str) -> str:
@@ -58,6 +61,8 @@ def _base_ticket_ctx(**overrides) -> dict:
         "source": "jira",
         "status": "Open",
         "summary": "Test ticket",
+        "_show_more_actions": True,  # Show all buttons for test visibility
+        "_show_nav": True,  # Show nav buttons for test visibility
     }
     ctx.update(overrides)
     return ctx
@@ -114,11 +119,11 @@ class TestActionPanelButtons(unittest.TestCase):
 
     def test_node_history_button_needs_service_tag_or_hostname(self):
         out_none = _capture_panel(_base_ticket_ctx())
-        self._lacks(out_none, "h")
+        self._lacks(out_none, "hn")
         out_tag = _capture_panel(_base_ticket_ctx(service_tag="10NQ724"))
-        self._has(out_tag, "h")
+        self._has(out_tag, "hn")
         out_host = _capture_panel(_base_ticket_ctx(hostname="d0001142"))
-        self._has(out_host, "h")
+        self._has(out_host, "hn")
 
     # --- Netbox device view (no actions/transitions) ---
 
@@ -283,13 +288,14 @@ class TestDetailViewRouting(unittest.TestCase):
         if ctx is None:
             ctx = _base_ticket_ctx()
         inputs = iter(keys)
+        import cwhelper.tui.actions as _actions
         with patch("builtins.input", side_effect=inputs), \
              patch("builtins.print"), \
-             patch.object(gnc, "_print_action_panel"), \
-             patch.object(gnc, "_print_pretty"), \
-             patch.object(gnc, "_clear_screen"), \
-             patch.object(gnc, "_refresh_ctx"), \
-             patch.object(gnc, "_brief_pause"):
+             patch.object(_actions, "_print_action_panel"), \
+             patch.object(_actions, "_print_pretty"), \
+             patch.object(_actions, "_clear_screen"), \
+             patch.object(_actions, "_refresh_ctx"), \
+             patch.object(_actions, "_brief_pause"):
             return gnc._post_detail_prompt(ctx, **kw)
 
     def test_b_returns_back(self):
@@ -305,9 +311,9 @@ class TestDetailViewRouting(unittest.TestCase):
     def test_q_returns_quit(self):
         self.assertEqual(self._run_prompt(["q"]), "quit")
 
-    def test_h_with_service_tag_returns_history(self):
+    def test_hn_with_service_tag_returns_history(self):
         ctx = _base_ticket_ctx(service_tag="10NQ724")
-        self.assertEqual(self._run_prompt(["h"], ctx=ctx), "history")
+        self.assertEqual(self._run_prompt(["hn"], ctx=ctx), "history")
 
     def test_h_without_node_id_falls_through(self):
         """Without service_tag/hostname, 'h' is not 'history', falls to back."""
@@ -325,7 +331,7 @@ class TestDetailViewRouting(unittest.TestCase):
 
     def test_r_with_rack_calls_map(self):
         ctx = _base_ticket_ctx(rack_location="US-EVI01.DH1.R64.RU34")
-        with patch.object(gnc, "_draw_mini_dh_map") as dm:
+        with patch.object(_actions, "_draw_mini_dh_map") as dm:
             # 'r' draws map and waits for input, then loop; 'b' exits
             self._run_prompt(["r", "", "b"], ctx=ctx)
             dm.assert_called_once_with("US-EVI01.DH1.R64.RU34")
@@ -344,16 +350,16 @@ class TestDetailViewRouting(unittest.TestCase):
 
     def test_d_toggles_diags(self):
         ctx = _base_ticket_ctx(diag_links=[{"url": "https://example.com", "label": "link"}])
-        with patch.object(gnc, "_print_diagnostics_inline"):
+        with patch.object(_actions, "_print_diagnostics_inline"):
             self._run_prompt(["d", "b"], ctx=ctx)
             self.assertTrue(ctx["_show_diags"])
 
     def test_bookmark_star_adds(self):
         ctx = _base_ticket_ctx()
         state = {"bookmarks": []}
-        with patch.object(gnc, "_add_bookmark", return_value=state) as ab, \
-             patch.object(gnc, "_save_user_state"), \
-             patch.object(gnc, "_load_user_state", return_value=state):
+        with patch.object(_actions, "_add_bookmark", return_value=state) as ab, \
+             patch.object(_actions, "_save_user_state"), \
+             patch.object(_actions, "_load_user_state", return_value=state):
             self._run_prompt(["*", "b"], ctx=ctx, state=state)
             ab.assert_called_once()
 
@@ -362,9 +368,9 @@ class TestDetailViewRouting(unittest.TestCase):
         state = {"bookmarks": [
             {"label": "DO-99999", "type": "ticket", "params": {"key": "DO-99999"}}
         ]}
-        with patch.object(gnc, "_remove_bookmark", return_value=state) as rb, \
-             patch.object(gnc, "_save_user_state"), \
-             patch.object(gnc, "_load_user_state", return_value=state):
+        with patch.object(_actions, "_remove_bookmark", return_value=state) as rb, \
+             patch.object(_actions, "_save_user_state"), \
+             patch.object(_actions, "_load_user_state", return_value=state):
             self._run_prompt(["*", "b"], ctx=ctx, state=state)
             rb.assert_called_once()
 
@@ -386,12 +392,12 @@ class TestIsMine(unittest.TestCase):
     """Verify _is_mine checks assignment correctly."""
 
     def _set_identity(self, display_name=None, account_id=None):
-        gnc._my_display_name = display_name
-        gnc._my_account_id = account_id
+        _cfg._my_display_name = display_name
+        _cfg._my_account_id = account_id
 
     def tearDown(self):
-        gnc._my_display_name = None
-        gnc._my_account_id = None
+        _cfg._my_display_name = None
+        _cfg._my_account_id = None
 
     def test_matches_display_name_case_insensitive(self):
         self._set_identity(display_name="John Smith")
@@ -733,8 +739,8 @@ class TestConfigIntegrity(unittest.TestCase):
 class TestNtfySend(unittest.TestCase):
     """Tests for _ntfy_send() — ntfy.sh push notification function."""
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_sends_notification(self):
         mock_post = MagicMock()
         with patch("requests.post", mock_post):
@@ -747,8 +753,8 @@ class TestNtfySend(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Priority"], "high")
         self.assertEqual(kwargs["headers"]["Tags"], "warning")
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_omits_tags_header_when_empty(self):
         mock_post = MagicMock()
         with patch("requests.post", mock_post):
@@ -756,24 +762,24 @@ class TestNtfySend(unittest.TestCase):
         headers = mock_post.call_args[1]["headers"]
         self.assertNotIn("Tags", headers)
 
-    @patch.object(gnc, "NTFY_TOPIC", "")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_noop_when_no_topic(self):
         mock_post = MagicMock()
         with patch("requests.post", mock_post):
             gnc._ntfy_send("Title", "msg")
         mock_post.assert_not_called()
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", False)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", False)
     def test_noop_when_disabled(self):
         mock_post = MagicMock()
         with patch("requests.post", mock_post):
             gnc._ntfy_send("Title", "msg")
         mock_post.assert_not_called()
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_silent_on_network_error(self):
         mock_post = MagicMock(side_effect=Exception("Connection refused"))
         with patch("requests.post", mock_post):
@@ -784,47 +790,47 @@ class TestStaleUnassigned(unittest.TestCase):
     """Tests for _check_stale_unassigned()."""
 
     def setUp(self):
-        gnc._ntfy_alerted.clear()
+        _cfg._ntfy_alerted.clear()
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_alerts_on_stale_unassigned(self):
         import time, datetime as dt
         old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
         issues = [{"key": "DO-100", "fields": {"assignee": None, "created": old_time}}]
-        with patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_stale_unassigned(issues, "LAS1")
         mock_send.assert_called_once()
         self.assertIn("DO-100", mock_send.call_args[0][1])
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_skips_assigned_tickets(self):
         import datetime as dt
         old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
         issues = [{"key": "DO-100", "fields": {"assignee": {"displayName": "Alice"}, "created": old_time}}]
-        with patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_stale_unassigned(issues, "LAS1")
         mock_send.assert_not_called()
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_no_duplicate_alerts(self):
         import datetime as dt
         old_time = (dt.datetime.now() - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
         issues = [{"key": "DO-100", "fields": {"assignee": None, "created": old_time}}]
-        with patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_stale_unassigned(issues, "LAS1")
             gnc._check_stale_unassigned(issues, "LAS1")  # second call
         mock_send.assert_called_once()  # only alerted once
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_skips_recent_tickets(self):
         import datetime as dt
         recent = dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000+0000")
         issues = [{"key": "DO-100", "fields": {"assignee": None, "created": recent}}]
-        with patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_stale_unassigned(issues, "LAS1")
         mock_send.assert_not_called()
 
@@ -833,51 +839,51 @@ class TestSLAWarnings(unittest.TestCase):
     """Tests for _check_sla_warnings()."""
 
     def setUp(self):
-        gnc._ntfy_alerted.clear()
+        _cfg._ntfy_alerted.clear()
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_alerts_on_sla_breach(self):
         issues = [{"key": "DO-200", "fields": {
             "assignee": {"emailAddress": "me@test.com"}}}]
         sla_data = [{"name": "Time to Resolution", "ongoingCycle": {
             "breached": True, "remainingTime": {"millis": -1000, "friendly": "-1h"}}}]
-        with patch.object(gnc, "_fetch_sla", return_value=sla_data), \
-             patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_fetch_sla", return_value=sla_data), \
+             patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_sla_warnings(issues, "me@test.com", "tok")
         mock_send.assert_called_once()
         self.assertIn("breached", mock_send.call_args[0][1].lower())
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_alerts_on_low_remaining(self):
         issues = [{"key": "DO-200", "fields": {
             "assignee": {"emailAddress": "me@test.com"}}}]
         sla_data = [{"name": "Time to Resolution", "ongoingCycle": {
             "breached": False, "remainingTime": {"millis": 1800000, "friendly": "30m"}}}]
-        with patch.object(gnc, "_fetch_sla", return_value=sla_data), \
-             patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_fetch_sla", return_value=sla_data), \
+             patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_sla_warnings(issues, "me@test.com", "tok")
         mock_send.assert_called_once()
         self.assertIn("30m", mock_send.call_args[0][1])
 
-    @patch.object(gnc, "NTFY_TOPIC", "test-topic")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "test-topic")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_skips_other_peoples_tickets(self):
         issues = [{"key": "DO-200", "fields": {
             "assignee": {"emailAddress": "other@test.com"}}}]
-        with patch.object(gnc, "_fetch_sla") as mock_sla, \
-             patch.object(gnc, "_ntfy_send") as mock_send:
+        with patch.object(_notif, "_fetch_sla") as mock_sla, \
+             patch.object(_notif, "_ntfy_send") as mock_send:
             gnc._check_sla_warnings(issues, "me@test.com", "tok")
         mock_sla.assert_not_called()
         mock_send.assert_not_called()
 
-    @patch.object(gnc, "NTFY_TOPIC", "")
-    @patch.object(gnc, "_NTFY_ENABLED", True)
+    @patch.object(_cfg, "NTFY_TOPIC", "")
+    @patch.object(_cfg, "_NTFY_ENABLED", True)
     def test_noop_when_no_topic(self):
         issues = [{"key": "DO-200", "fields": {
             "assignee": {"emailAddress": "me@test.com"}}}]
-        with patch.object(gnc, "_fetch_sla") as mock_sla:
+        with patch.object(_notif, "_fetch_sla") as mock_sla:
             gnc._check_sla_warnings(issues, "me@test.com", "tok")
         mock_sla.assert_not_called()
 
@@ -925,7 +931,7 @@ class TestWalkthroughMode(unittest.TestCase):
         notes = [{"rack": "R064", "ru": 34, "device_name": "node-01",
                   "status": "Active", "note": "test", "timestamp": "2026-01-01T00:00:00Z"}]
         session = {"site_code": "US-CENTRAL-07A", "dh": "DH1", "started_at": "2026-01-01T00:00:00Z"}
-        with patch.object(gnc, "_save_user_state"):
+        with patch.object(_actions, "_save_user_state"):
             gnc._walkthrough_save_notes(state, notes, session)
         self.assertEqual(state["walkthrough_notes"], notes)
         self.assertEqual(state["walkthrough_session"], session)
@@ -1020,6 +1026,406 @@ class TestExtractPsuInfo(unittest.TestCase):
         desc = "PSU with id 1 failed. PSU with id 3 also failed."
         info = gnc._extract_psu_info(desc)
         self.assertEqual(info["all_psu_ids"], ["1", "3"])
+
+
+# ===========================================================================
+# Pre-walk brief
+# ===========================================================================
+
+class TestPrewalkBrief(unittest.TestCase):
+    """Tests for _walkthrough_prewalk_brief."""
+
+    def _make_issue(self, key, rack_loc, status="Open", created="2026-03-01T00:00:00.000+0000"):
+        return {
+            "key": key,
+            "fields": {
+                "summary": f"Test issue {key}",
+                "status":  {"name": status},
+                "created": created,
+                "customfield_10207": rack_loc,
+                "customfield_10193": "",
+            },
+        }
+
+    @patch("cwhelper.services.walkthrough._jql_search")
+    def test_filters_to_current_dh(self, mock_jql):
+        """Only tickets matching the current DH are shown."""
+        mock_jql.return_value = [
+            self._make_issue("DO-001", "US-EVI01.DH1.R042.RU03"),   # DH1 — should show
+            self._make_issue("DO-002", "US-EVI01.DH2.R010.RU01"),   # DH2 — should be filtered
+            self._make_issue("DO-003", "US-EVI01.DH1.R064.RU14"),   # DH1 — should show
+        ]
+        with patch("builtins.print"):
+            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+        mock_jql.assert_called_once()
+
+    @patch("cwhelper.services.walkthrough._jql_search")
+    def test_skips_when_no_credentials(self, mock_jql):
+        """No Jira call is made when email or token is missing."""
+        gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "", "token")
+        gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "")
+        mock_jql.assert_not_called()
+
+    @patch("cwhelper.services.walkthrough._jql_search")
+    def test_handles_empty_result(self, mock_jql):
+        """No crash or output when Jira returns no tickets."""
+        mock_jql.return_value = []
+        with patch("builtins.print"):
+            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+
+    @patch("cwhelper.services.walkthrough._jql_search")
+    def test_handles_jira_exception(self, mock_jql):
+        """Gracefully degrades when Jira raises an exception."""
+        mock_jql.side_effect = Exception("network error")
+        with patch("builtins.print"):
+            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+
+    @patch("cwhelper.services.walkthrough._jql_search")
+    def test_sorts_by_rack_number(self, mock_jql):
+        """Rows are sorted by rack number ascending."""
+        mock_jql.return_value = [
+            self._make_issue("DO-010", "US-EVI01.DH1.R100.RU01"),
+            self._make_issue("DO-002", "US-EVI01.DH1.R005.RU01"),
+            self._make_issue("DO-007", "US-EVI01.DH1.R042.RU01"),
+        ]
+        printed = []
+        with patch("builtins.print", side_effect=lambda *a, **k: printed.append(str(a))):
+            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+        # R005 should appear before R042 and R100 in output
+        rack_lines = [l for l in printed if "R005" in l or "R042" in l or "R100" in l]
+        self.assertTrue(len(rack_lines) >= 3)
+        self.assertLess(printed.index(rack_lines[0]), printed.index(rack_lines[1]))
+
+
+# ===========================================================================
+# Radar — HO pre-DO awareness
+# ===========================================================================
+
+import cwhelper.services.radar as _radar  # noqa: E402
+import cwhelper.services.watcher as _watcher  # noqa: E402
+
+
+class TestInferProcedure(unittest.TestCase):
+    """Tests for _infer_procedure status→procedure mapping."""
+
+    def test_sent_to_dct_uc(self):
+        proc, hint = _watcher._infer_procedure("Sent to DCT UC")
+        self.assertEqual(proc, "Uncable")
+        self.assertIn("imminent", hint.lower())
+
+    def test_sent_to_dct_rc(self):
+        proc, hint = _watcher._infer_procedure("Sent to DCT RC")
+        self.assertEqual(proc, "Recable")
+        self.assertIn("imminent", hint.lower())
+
+    def test_rma_initiate(self):
+        proc, hint = _watcher._infer_procedure("RMA-initiate")
+        self.assertEqual(proc, "RMA Swap")
+
+    def test_awaiting_parts(self):
+        proc, hint = _watcher._infer_procedure("Awaiting Parts")
+        self.assertEqual(proc, "Parts")
+        self.assertIn("parts", hint.lower())
+
+    def test_unknown_status(self):
+        proc, hint = _watcher._infer_procedure("Some Other Status")
+        self.assertEqual(proc, "Unknown")
+
+    def test_case_insensitive(self):
+        proc, _ = _watcher._infer_procedure("sent to dct rc")
+        self.assertEqual(proc, "Recable")
+        proc2, _ = _watcher._infer_procedure("SENT TO DCT RC")
+        self.assertEqual(proc2, "Recable")
+
+
+class TestRadarUrgencyRank(unittest.TestCase):
+    """Tests for _urgency_rank ordering."""
+
+    def test_imminent_ranks_highest(self):
+        self.assertEqual(_radar._urgency_rank("Sent to DCT UC"), 1)
+        self.assertEqual(_radar._urgency_rank("Sent to DCT RC"), 1)
+
+    def test_soon_ranks_second(self):
+        self.assertEqual(_radar._urgency_rank("RMA-initiate"), 2)
+
+    def test_eventual_ranks_third(self):
+        self.assertEqual(_radar._urgency_rank("Awaiting Parts"), 3)
+
+    def test_unknown_ranks_last(self):
+        self.assertGreater(_radar._urgency_rank("Random"), 3)
+
+    def test_ordering(self):
+        self.assertLess(
+            _radar._urgency_rank("Sent to DCT RC"),
+            _radar._urgency_rank("RMA-initiate"),
+        )
+        self.assertLess(
+            _radar._urgency_rank("RMA-initiate"),
+            _radar._urgency_rank("Awaiting Parts"),
+        )
+
+
+class TestFetchRadarQueue(unittest.TestCase):
+    """Tests for _fetch_radar_queue with mocked Jira."""
+
+    def _make_ho(self, key, status, rack_loc="US-EVI01.DH1.R064.RU22"):
+        return {
+            "key": key,
+            "fields": {
+                "summary": f"Test HO {key}",
+                "status": {"name": status},
+                "customfield_10207": rack_loc,
+                "customfield_10193": "10NQ724",
+                "customfield_10192": "d0001142",
+                "customfield_10194": "US-CENTRAL-07A",
+                "assignee": None,
+                "created": "2026-03-01T00:00:00.000+0000",
+                "updated": "2026-03-10T00:00:00.000+0000",
+                "statuscategorychangedate": "2026-03-09T00:00:00.000+0000",
+                "issuetype": {"name": "Task"},
+            },
+        }
+
+    @patch("cwhelper.services.radar._search_queue")
+    def test_returns_sorted_by_urgency(self, mock_sq):
+        mock_sq.return_value = [
+            self._make_ho("HO-100", "Awaiting Parts", "US-EVI01.DH1.R010.RU01"),
+            self._make_ho("HO-200", "Sent to DCT RC", "US-EVI01.DH1.R020.RU01"),
+            self._make_ho("HO-300", "RMA-initiate", "US-EVI01.DH1.R030.RU01"),
+        ]
+        result = _radar._fetch_radar_queue("e", "t", site="US-EVI01")
+        keys = [r["key"] for r in result]
+        # Imminent (RC) first, then soon (RMA), then eventual (Parts)
+        self.assertEqual(keys, ["HO-200", "HO-300", "HO-100"])
+
+    @patch("cwhelper.services.radar._search_queue")
+    def test_same_urgency_sorted_by_rack(self, mock_sq):
+        mock_sq.return_value = [
+            self._make_ho("HO-100", "Sent to DCT UC", "US-EVI01.DH1.R100.RU01"),
+            self._make_ho("HO-200", "Sent to DCT RC", "US-EVI01.DH1.R010.RU01"),
+        ]
+        result = _radar._fetch_radar_queue("e", "t")
+        keys = [r["key"] for r in result]
+        # Both urgency 1, so sorted by rack: R010 < R100
+        self.assertEqual(keys, ["HO-200", "HO-100"])
+
+    @patch("cwhelper.services.radar._search_queue")
+    def test_empty_queue(self, mock_sq):
+        mock_sq.return_value = []
+        result = _radar._fetch_radar_queue("e", "t")
+        self.assertEqual(result, [])
+
+    @patch("cwhelper.services.radar._search_queue")
+    def test_calls_search_with_radar_filter(self, mock_sq):
+        mock_sq.return_value = []
+        _radar._fetch_radar_queue("email", "token", site="US-EVI01")
+        mock_sq.assert_called_once_with(
+            "US-EVI01", "email", "token",
+            limit=50, status_filter="radar", project="HO", use_cache=False,
+        )
+
+
+class TestRadarSummaryLine(unittest.TestCase):
+    """Tests for _radar_summary_line."""
+
+    def _make_ho(self, key, status, rack="US-EVI01.DH1.R064.RU22"):
+        return {
+            "key": key,
+            "fields": {
+                "status": {"name": status},
+                "customfield_10207": rack,
+            },
+        }
+
+    def test_counts_urgency_tiers(self):
+        issues = [
+            self._make_ho("HO-1", "Sent to DCT RC"),
+            self._make_ho("HO-2", "Sent to DCT UC"),
+            self._make_ho("HO-3", "Awaiting Parts"),
+        ]
+        line = _strip_ansi(_radar._radar_summary_line(issues))
+        self.assertIn("2 imminent", line)
+        self.assertIn("1 awaiting parts", line)
+
+    def test_empty(self):
+        line = _radar._radar_summary_line([])
+        self.assertIn("No radar tickets", line)
+
+    def test_hottest_area(self):
+        issues = [
+            self._make_ho("HO-1", "Sent to DCT RC", "US-EVI01.DH1.R064.RU01"),
+            self._make_ho("HO-2", "Sent to DCT UC", "US-EVI01.DH1.R065.RU01"),
+        ]
+        line = _strip_ansi(_radar._radar_summary_line(issues))
+        self.assertIn("R60-R69", line)
+
+
+class TestBuildPrepBrief(unittest.TestCase):
+    """Tests for _build_prep_brief in context.py."""
+
+    def _make_ho(self, status="Sent to DCT RC", summary="Recable node for onboarding"):
+        return {
+            "key": "HO-23456",
+            "fields": {
+                "summary": summary,
+                "status": {"name": status},
+                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                "customfield_10193": "10NQ724",
+                "customfield_10192": "d0001142",
+            },
+        }
+
+    @patch("cwhelper.services.search._search_queue", return_value=[])
+    @patch("cwhelper.services.queue._search_node_history", return_value=[])
+    def test_basic_recable(self, mock_hist, mock_sq):
+        from cwhelper.services.context import _build_prep_brief
+        prep = _build_prep_brief(self._make_ho(), "e", "t")
+        self.assertEqual(prep["key"], "HO-23456")
+        self.assertEqual(prep["procedure"], "Recable")
+        self.assertEqual(prep["node"], "10NQ724")
+        self.assertIn("R064", prep["location"])
+        self.assertIn("optics", ", ".join(prep["tools"]).lower())
+
+    @patch("cwhelper.services.search._search_queue", return_value=[])
+    @patch("cwhelper.services.queue._search_node_history")
+    def test_repeat_offender(self, mock_hist, mock_sq):
+        from cwhelper.services.context import _build_prep_brief
+        mock_hist.return_value = [{"key": f"DO-{i}"} for i in range(5)]
+        prep = _build_prep_brief(self._make_ho(), "e", "t")
+        self.assertTrue(prep["repeat_offender"])
+        self.assertEqual(prep["history_count"], 5)
+
+    @patch("cwhelper.services.search._search_queue", return_value=[])
+    @patch("cwhelper.services.queue._search_node_history", return_value=[])
+    def test_psu_kit(self, mock_hist, mock_sq):
+        from cwhelper.services.context import _build_prep_brief
+        prep = _build_prep_brief(
+            self._make_ho(status="RMA-initiate", summary="PSU failure slot 2"),
+            "e", "t",
+        )
+        self.assertEqual(prep["kit_key"], "psu swap")
+
+    @patch("cwhelper.services.search._search_queue", return_value=[])
+    @patch("cwhelper.services.queue._search_node_history", return_value=[])
+    def test_uncable_procedure(self, mock_hist, mock_sq):
+        from cwhelper.services.context import _build_prep_brief
+        prep = _build_prep_brief(
+            self._make_ho(status="Sent to DCT UC", summary="Uncable for RMA"),
+            "e", "t",
+        )
+        self.assertEqual(prep["procedure"], "Uncable")
+        self.assertEqual(prep["kit_key"], "uncable")
+
+
+class TestCheckRadarLink(unittest.TestCase):
+    """Tests for _check_radar_link — linking new DOs to tracked radar HOs."""
+
+    def setUp(self):
+        self._orig = dict(_cfg._radar_known_keys)
+
+    def tearDown(self):
+        _cfg._radar_known_keys = self._orig
+
+    def _make_do(self, key="DO-49999"):
+        return {
+            "key": key,
+            "fields": {
+                "summary": "Recable node",
+                "status": {"name": "Open"},
+                "customfield_10193": "10NQ724",
+                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+            },
+        }
+
+    @patch("cwhelper.services.watcher._jira_get_issue")
+    def test_attaches_radar_ho_when_linked(self, mock_get):
+        _cfg._radar_known_keys = {
+            "HO-23456": {
+                "key": "HO-23456",
+                "fields": {
+                    "status": {"name": "Sent to DCT RC"},
+                    "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                },
+            },
+        }
+        mock_get.return_value = {
+            "key": "DO-49999",
+            "fields": {
+                "issuelinks": [{
+                    "type": {"name": "Relates"},
+                    "outwardIssue": {"key": "HO-23456"},
+                }],
+            },
+        }
+        issue = self._make_do()
+        _watcher._check_radar_link(issue, "e", "t")
+        self.assertIn("_radar_ho", issue)
+        self.assertEqual(issue["_radar_ho"]["ho_key"], "HO-23456")
+        self.assertEqual(issue["_radar_ho"]["procedure"], "Recable")
+
+    @patch("cwhelper.services.watcher._jira_get_issue")
+    def test_no_match_when_ho_not_tracked(self, mock_get):
+        _cfg._radar_known_keys = {}
+        issue = self._make_do()
+        _watcher._check_radar_link(issue, "e", "t")
+        self.assertNotIn("_radar_ho", issue)
+        mock_get.assert_not_called()
+
+    @patch("cwhelper.services.watcher._jira_get_issue")
+    def test_skips_non_do_tickets(self, mock_get):
+        _cfg._radar_known_keys = {"HO-100": {}}
+        issue = {"key": "HO-100", "fields": {}}
+        _watcher._check_radar_link(issue, "e", "t")
+        mock_get.assert_not_called()
+
+    @patch("cwhelper.services.watcher._jira_get_issue")
+    def test_handles_api_failure(self, mock_get):
+        _cfg._radar_known_keys = {"HO-100": {}}
+        mock_get.side_effect = Exception("network error")
+        issue = self._make_do()
+        _watcher._check_radar_link(issue, "e", "t")
+        self.assertNotIn("_radar_ho", issue)
+
+
+class TestShowGrabCardRadar(unittest.TestCase):
+    """Tests for enhanced grab card with radar HO context."""
+
+    def _make_issue(self, radar_ho=None):
+        iss = {
+            "key": "DO-49999",
+            "fields": {
+                "summary": "Recable node for onboarding",
+                "status": {"name": "Open"},
+                "customfield_10193": "10NQ724",
+                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                "assignee": None,
+            },
+        }
+        if radar_ho:
+            iss["_radar_ho"] = radar_ho
+        return iss
+
+    @patch("builtins.input", return_value="s")
+    def test_normal_card_no_radar(self, mock_input):
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(" ".join(str(x) for x in a) + "\n")):
+            _watcher._show_grab_card(self._make_issue(), "e", "t")
+        output = _strip_ansi(buf.getvalue())
+        self.assertIn("NEW TICKET", output)
+        self.assertNotIn("EXPECTED", output)
+        self.assertNotIn("Linked to", output)
+
+    @patch("builtins.input", return_value="s")
+    def test_enhanced_card_with_radar(self, mock_input):
+        radar = {"ho_key": "HO-23456", "procedure": "Recable",
+                 "hint": "Recable DO imminent", "rack": "R064"}
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(" ".join(str(x) for x in a) + "\n")):
+            _watcher._show_grab_card(self._make_issue(radar_ho=radar), "e", "t")
+        output = _strip_ansi(buf.getvalue())
+        self.assertIn("EXPECTED", output)
+        self.assertIn("HO-23456", output)
+        self.assertIn("Recable", output)
 
 
 # ===========================================================================

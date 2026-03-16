@@ -19,11 +19,12 @@ from cwhelper.cache import _brief_pause
 from cwhelper.services.context import _format_age, _parse_jira_timestamp, _unwrap_field, _parse_rack_location, _fetch_and_show
 from cwhelper.services.search import _search_queue
 from cwhelper.services.queue import _run_queue_interactive, _run_history_interactive, _search_node_history, _run_stale_verification
-from cwhelper.services.watcher import _is_watcher_running, _start_background_watcher, _stop_background_watcher, _handle_new_tickets
+from cwhelper.services.watcher import _is_watcher_running, _start_background_watcher, _stop_background_watcher, _handle_new_tickets, _is_radar_running, _handle_radar_tickets
 from cwhelper.services.bookmarks import _manage_bookmarks
 from cwhelper.services.rack import _draw_mini_dh_map
 from cwhelper.services.session_log import _log_event, _print_session_log, _copy_session_to_clipboard, _print_jira_activity
 from cwhelper.services.walkthrough import _walkthrough_mode
+from cwhelper.services.brief import run_shift_brief
 from cwhelper.tui.rich_console import _rich_print_menu, console
 
 
@@ -224,7 +225,8 @@ def _interactive_menu():
         watcher_str = ""
         if watcher_running:
             site_label = _watcher_site or "all sites"
-            watcher_str = f"{_watcher_project} @ {site_label} — every {_watcher_interval}s"
+            radar_tag = " + radar" if _is_radar_running() else ""
+            watcher_str = f"{_watcher_project} @ {site_label} — every {_watcher_interval}s{radar_tag}"
 
         # --- Last ticket shortcut ---
         last_ticket_pair = None
@@ -249,6 +251,7 @@ def _interactive_menu():
             ("5",  "Rack map",     ""),
             ("6",  "Bookmarks",    ""),
             ("",   "",             ""),
+            ("b",  "Shift brief",  "AI priority summary — what to work on first"),
             ("p",  "Start all",    "bulk In Progress"),
             ("l",  "Activity",     "log · Jira"),
             ("w",  "Walkthrough",  "rack-by-rack DH walk"),
@@ -281,22 +284,37 @@ def _interactive_menu():
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return
 
+        # --- Check for radar HO tickets (pre-DO awareness) ---
+        if _is_radar_running():
+            result = _handle_radar_tickets(email, token)
+            if result == "quit":
+                _stop_background_watcher()
+                print(f"\n  {DIM}Goodbye.{RESET}\n")
+                return
+
         # Build prompt hint
         bm_hint = f", [{bm_keys[0]}-{bm_keys[len(bookmarks)-1]}]" if bookmarks else ""
         watcher_hint = ""
         if watcher_running:
             pending = _watcher_queue.qsize()
-            if pending > 0:
+            radar_pending = _cfg._radar_queue.qsize() if _is_radar_running() else 0
+            if pending > 0 or radar_pending > 0:
+                parts = []
+                if pending > 0:
+                    parts.append(f"{pending} NEW TICKET{'S' if pending != 1 else ''}")
+                if radar_pending > 0:
+                    parts.append(f"{radar_pending} RADAR HO{'s' if radar_pending != 1 else ''}")
+                combined = " + ".join(parts)
                 watcher_hint = (
                     f"\n  {YELLOW}{BOLD}{'━' * 50}{RESET}"
-                    f"\n  {YELLOW}{BOLD}  {pending} NEW TICKET{'S' if pending != 1 else ''} FOUND!"
+                    f"\n  {YELLOW}{BOLD}  {combined} FOUND!"
                     f"  Press ENTER to view{RESET}"
                     f"\n  {YELLOW}{BOLD}{'━' * 50}{RESET}\n"
                 )
             else:
                 watcher_hint = f"\n  {DIM}Watching... press ENTER to refresh{RESET}"
         try:
-            choice = input(f"  Select [0-6]{bm_hint}, ticket key, or q: {watcher_hint}").strip().lower()
+            choice = input(f"  Select [0-6, b]{bm_hint}, ticket key, or q: {watcher_hint}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             _stop_background_watcher()
             print(f"\n\n  {DIM}Goodbye.{RESET}\n")
@@ -745,6 +763,15 @@ def _interactive_menu():
         # --- 6: Bookmark manager ----------------------------------------------
         elif choice == "6":
             state = _manage_bookmarks(state, email, token)
+
+        # --- b: Shift brief — AI priority summary from live queue ------------
+        elif choice == "b":
+            _site = state.get("site_filter", "US-CENTRAL-07A")
+            run_shift_brief(email, token, site=_site)
+            try:
+                input(f"  {DIM}Press ENTER to return to menu...{RESET}")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
         # --- p: Bulk start — put all my open DO tickets In Progress -----------
         elif choice == "p":

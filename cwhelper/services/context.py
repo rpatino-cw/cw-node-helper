@@ -13,7 +13,7 @@ import time
 from cwhelper import config as _cfg
 from cwhelper.config import *  # noqa: F401,F403
 from cwhelper.cache import _lookup_ib_connections
-__all__ = ['_format_age', '_parse_jira_timestamp', '_unwrap_field', '_extract_custom_fields', '_extract_linked_issues', '_extract_portal_url', '_extract_description_details', '_extract_psu_info', '_extract_comments', '_adf_to_plain_text', '_render_adf_description', '_parse_rack_location', '_get_physical_neighbors', '_short_device_name', '_build_context', '_fetch_and_show', 'get_node_context']
+__all__ = ['_format_age', '_parse_jira_timestamp', '_unwrap_field', '_extract_custom_fields', '_build_prep_brief', '_extract_linked_issues', '_extract_portal_url', '_extract_description_details', '_extract_psu_info', '_extract_comments', '_adf_to_plain_text', '_render_adf_description', '_parse_rack_location', '_get_physical_neighbors', '_short_device_name', '_build_context', '_fetch_and_show', 'get_node_context']
 from cwhelper.clients.jira import _jira_get_issue, _jira_get, _get_credentials, _handle_response_errors
 from cwhelper.clients.netbox import _build_netbox_context, _netbox_available, _netbox_find_device
 from cwhelper.clients.grafana import _build_grafana_urls
@@ -89,6 +89,110 @@ def _extract_custom_fields(fields: dict) -> dict:
     for jira_id, friendly_name in CUSTOM_FIELDS.items():
         extracted[friendly_name] = _unwrap_field(fields.get(jira_id))
     return extracted
+
+
+
+def _build_prep_brief(ho_issue: dict, email: str, token: str) -> dict:
+    """Build a deterministic prep brief for an HO ticket in pre-DO status.
+
+    Returns a dict with: key, status, procedure, rack, location, tools,
+    history_count, repeat_offender, rack_neighbors.
+    """
+    from cwhelper.services.queue import _search_node_history
+    from cwhelper.services.watcher import _infer_procedure
+
+    f = ho_issue.get("fields", {})
+    key = ho_issue.get("key", "?")
+    status = (f.get("status") or {}).get("name", "?")
+    rack_raw = _unwrap_field(f.get("customfield_10207")) or ""
+    svc_tag = _unwrap_field(f.get("customfield_10193")) or ""
+    hostname = _unwrap_field(f.get("customfield_10192")) or ""
+    summary = (f.get("summary") or "").strip()
+
+    proc, hint = _infer_procedure(status)
+
+    # Infer tool kit from procedure + summary keywords
+    kit_key = "default"
+    lower_summary = summary.lower()
+    lower_proc = proc.lower()
+    if "recable" in lower_proc or "recable" in lower_summary:
+        kit_key = "recable"
+    elif "uncable" in lower_proc or "uncable" in lower_summary:
+        kit_key = "uncable"
+    elif "psu" in lower_summary:
+        kit_key = "psu swap"
+    elif "gpu" in lower_summary:
+        kit_key = "gpu reseat"
+    elif "dimm" in lower_summary or "memory" in lower_summary:
+        kit_key = "dimm swap"
+    elif "cable" in lower_summary:
+        kit_key = "cable"
+    elif "rma" in lower_proc or "rma" in lower_summary or "swap" in lower_summary:
+        kit_key = "rma swap"
+    elif "inspect" in lower_summary:
+        kit_key = "inspection"
+
+    tools = PROCEDURE_KITS.get(kit_key, PROCEDURE_KITS["default"])
+
+    # Parse rack location for display
+    location = rack_raw
+    rack_number = ""
+    if "." in rack_raw:
+        parts = rack_raw.split(".")
+        if len(parts) >= 3:
+            rack_number = parts[-2]  # e.g. "R64"
+        location = ".".join(parts[-2:]) if len(parts) >= 2 else rack_raw
+
+    # Device history (count of DO/HO tickets in last 90 days)
+    history_count = 0
+    identifier = svc_tag or hostname
+    if identifier:
+        try:
+            history = _search_node_history(identifier, email, token, limit=20)
+            history_count = len(history)
+        except Exception:
+            pass
+
+    repeat_offender = history_count > 3
+
+    # Rack neighbors (other active tickets in the same rack)
+    rack_neighbors = []
+    if rack_number:
+        try:
+            from cwhelper.services.search import _search_queue
+            for project in ("DO", "HO"):
+                neighbors = _search_queue(
+                    "", email, token,
+                    mine_only=False, limit=10,
+                    status_filter="open", project=project,
+                )
+                for n in neighbors:
+                    nk = n.get("key", "")
+                    nf = n.get("fields", {})
+                    n_rack = _unwrap_field(nf.get("customfield_10207")) or ""
+                    if nk != key and rack_number in n_rack:
+                        n_loc = ""
+                        if "." in n_rack:
+                            n_loc = ".".join(n_rack.split(".")[-2:])
+                        rack_neighbors.append(f"{nk} ({n_loc})")
+        except Exception:
+            pass
+
+    return {
+        "key": key,
+        "status": status,
+        "procedure": proc,
+        "hint": hint,
+        "rack": rack_raw,
+        "location": location,
+        "node": identifier or "—",
+        "summary": summary,
+        "tools": tools,
+        "kit_key": kit_key,
+        "history_count": history_count,
+        "repeat_offender": repeat_offender,
+        "rack_neighbors": rack_neighbors[:5],
+    }
 
 
 
