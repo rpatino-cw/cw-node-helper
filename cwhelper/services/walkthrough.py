@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import os
+import tempfile
 import re as _re
 import subprocess
 import time
@@ -14,23 +15,41 @@ __all__ = [
     '_walkthrough_pick_site_dh', '_walkthrough_annotate_device',
     '_walkthrough_save_notes', '_walkthrough_resume_prompt',
     '_walkthrough_export', '_walkthrough_mode',
+    '_walkthrough_prewalk_brief', '_walkthrough_show_trend_alert',
 ]
 from cwhelper.clients.netbox import _netbox_get_rack_devices, _netbox_get
 from cwhelper.state import _save_user_state
 from cwhelper.cache import _brief_pause
 from cwhelper.tui.display import _clear_screen
+from cwhelper.services.context import _format_age, _parse_jira_timestamp, _parse_rack_location
+from cwhelper.services.search import _jql_search
 try:
     from cwhelper.services.queue import _search_node_history
-    from cwhelper.clients.jira import _post_comment
+    from cwhelper.clients.jira import _post_comment, _upload_attachment
 except ImportError:
     _search_node_history = None  # type: ignore[assignment]
     _post_comment = None  # type: ignore[assignment]
+    _upload_attachment = None  # type: ignore[assignment]
+try:
+    from cwhelper.clients.gsheets import _get_rma_data, _rma_available, _rma_file_age, _rma_file_age_secs
+except ImportError:
+    _get_rma_data = None  # type: ignore[assignment]
+    _rma_available = lambda: False
+    _rma_file_age = lambda: "?"
+    _rma_file_age_secs = lambda: -1
+try:
+    from cwhelper.clients.teleport import _tsh_available
+except ImportError:
+    _tsh_available = lambda: False  # type: ignore[assignment]
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 # One local report at a time — always overwritten on finish
 _WALKTHROUGH_REPORT_PATH = os.path.expanduser("~/.cwhelper_walkthrough_report.txt")
+_WALKTHROUGH_HTML_PATH   = os.path.expanduser("~/.cwhelper_walkthrough_report.html")
+_RMA_SHEET_URL = "https://docs.google.com/spreadsheets/d/1vTcB9-NEIXk1VowTL6NkBHYjioeosgn2WTDnVuABByo/edit?gid=1318234478#gid=1318234478"
+_OVERHEAD_MAP_URL = "https://docs.google.com/spreadsheets/d/1dtuaNuDuLPGzqkUb6pBOBM-meeoEioGata3xGkq-zgI/edit?gid=0#gid=0"
 
 _ISSUE_TEMPLATE_GROUPS = [
     ("Hardware", [
@@ -49,14 +68,18 @@ _ISSUE_TEMPLATE_GROUPS = [
         ("9",  "Thermal",           "high temps, fan failure, airflow issue"),
         ("10", "Garbage/debris",    "trash, packaging, blockage in/around rack"),
     ]),
+    ("RMA / Escalation", [
+        ("11", "RMA engaged",       "node flagged for RMA, awaiting replacement"),
+        ("12", "RMA pending",       "RMA requested, parts not yet arrived"),
+    ]),
     ("Other", [
-        ("11", "Custom",            "enter your own note"),
+        ("13", "Custom",            "enter your own note"),
     ]),
 ]
 
 # Flat list for lookup — keep in sync with groups above
 _ISSUE_TEMPLATES = [t for _, items in _ISSUE_TEMPLATE_GROUPS for t in items]
-_CUSTOM_KEY = "11"
+_CUSTOM_KEY = "13"
 
 # Matches the CoreWeave Slack walkthrough form
 _CHECKLIST = [
@@ -107,9 +130,149 @@ def _count_carryover(carryover: list) -> dict:
     }
 
 
+# ── Trend alert ───────────────────────────────────────────────────────────────
+
+def _walkthrough_show_trend_alert(dev_hist: list, dev_name: str) -> None:
+    """Print a trend alert if this device has been flagged 2+ times in the last 14 days."""
+    if not dev_hist or len(dev_hist) < 2:
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    recent = []
+    for h in dev_hist:
+        try:
+            d = datetime.fromisoformat(h["date"].replace("Z", "+00:00"))
+            if d >= cutoff:
+                recent.append(h)
+        except Exception:
+            recent.append(h)
+
+    display = recent if len(recent) >= 2 else dev_hist[:5]
+    count = len(display)
+    if count < 2:
+        return
+
+    flag_color = RED if count >= 3 else YELLOW
+    label = "recurring — consider escalating" if count >= 3 else "seen before — watch closely"
+
+    print(f"\n  {flag_color}{BOLD}⚡ TREND:{RESET}  {BOLD}{count} flag(s) in the last 14 days{RESET}"
+          f"  {DIM}— {label}{RESET}")
+    for h in display[:4]:
+        date_s = str(h.get("date", "?"))[:10]
+        itype  = (h.get("issue_type") or h.get("note") or "")[:45]
+        dh_s   = h.get("dh", "")
+        dh_tag = f"  {DIM}({dh_s}){RESET}" if dh_s else ""
+        print(f"  {DIM}  {date_s}  {itype}{RESET}{dh_tag}")
+    if count > 4:
+        print(f"  {DIM}  + {count - 4} more{RESET}")
+    print()
+
+
+# ── Pre-walk brief ────────────────────────────────────────────────────────────
+
+_BRIEF_OPEN_STATUSES = (
+    '"Open","Awaiting Support","Awaiting Triage","To Do","New","In Progress"'
+)
+
+
+def _walkthrough_prewalk_brief(site_code: str, dh: str, email: str, token: str) -> None:
+    """Query Jira for open DO tickets in this DH and print a sorted table.
+
+    Runs once after racks are loaded, before the main prompt loop.
+    Skipped silently if credentials are missing or Jira is unreachable.
+    """
+    if not email or not token:
+        return
+
+    print(f"  {DIM}Checking Jira for open tickets in {dh}...{RESET}", end="", flush=True)
+    jql = (
+        f'project = "DO" AND cf[10194] = "{site_code}" '
+        f'AND status in ({_BRIEF_OPEN_STATUSES}) '
+        f'ORDER BY created ASC'
+    )
+    try:
+        issues = _jql_search(
+            jql, email, token, max_results=100,
+            fields=["key", "summary", "status", "created",
+                    "customfield_10207",   # rack_location
+                    "customfield_10193"],  # service_tag
+        )
+    except Exception:
+        print(f"\r{'':60}\r  {DIM}Jira unreachable — skipping pre-walk brief.{RESET}\n")
+        return
+
+    print(f"\r{'':60}\r", end="")
+
+    if not issues:
+        print(f"  {DIM}No open DO tickets found for {site_code} — floor looks clean.{RESET}\n")
+        return
+
+    # Parse rack location and filter to this DH
+    current_dh = dh.upper()
+    rows = []
+    no_rack_count = 0
+
+    for iss in issues:
+        fields   = iss.get("fields", {})
+        rack_loc = fields.get("customfield_10207") or ""
+        if isinstance(rack_loc, dict):
+            rack_loc = rack_loc.get("value", "") or ""
+        parsed = _parse_rack_location(str(rack_loc))
+
+        key      = iss.get("key", "?")
+        summary  = (fields.get("summary") or "")[:48]
+        status   = ((fields.get("status") or {}).get("name") or "?")
+        created  = (fields.get("created") or "")
+        age_secs = _parse_jira_timestamp(created)
+        age_str  = _format_age(age_secs) if age_secs else "?"
+
+        if parsed:
+            ticket_dh = parsed.get("dh", "").upper()
+            if ticket_dh and ticket_dh != current_dh:
+                continue
+            rows.append({
+                "rack":     parsed["rack"],
+                "key":      key,
+                "summary":  summary,
+                "status":   status,
+                "age":      age_str,
+                "age_secs": age_secs or 0,
+            })
+        else:
+            no_rack_count += 1
+
+    if not rows:
+        if no_rack_count:
+            print(f"  {DIM}{no_rack_count} open ticket(s) found but none had a rack location in {dh}.{RESET}\n")
+        else:
+            print(f"  {DIM}No open tickets matched {dh} — floor looks clean.{RESET}\n")
+        return
+
+    rows.sort(key=lambda r: r["rack"])
+    total = len(rows) + no_rack_count
+
+    print(f"\n  {YELLOW}{BOLD}⚠  {total} open DO ticket(s) in {site_code} / {dh} before you walk:{RESET}\n")
+    print(f"  {DIM}{'RACK':<7}  {'TICKET':<12}  {'AGE':<7}  {'STATUS':<22}  SUMMARY{RESET}")
+    print(f"  {DIM}{'─' * 72}{RESET}")
+
+    for r in rows[:25]:
+        age_color = RED if r["age_secs"] > 86400 * 3 else YELLOW if r["age_secs"] > 86400 else DIM
+        rack_s    = f"R{r['rack']:03d}"
+        print(f"  {CYAN}{rack_s:<7}{RESET}  {BOLD}{r['key']:<12}{RESET}  "
+              f"{age_color}{r['age']:<7}{RESET}  {DIM}{r['status']:<22}  {r['summary']}{RESET}")
+
+    if len(rows) > 25:
+        print(f"  {DIM}  ... {len(rows) - 25} more (only top 25 shown){RESET}")
+    if no_rack_count:
+        print(f"  {DIM}  + {no_rack_count} ticket(s) with no rack location{RESET}")
+    print()
+
+
 # ── Banner ─────────────────────────────────────────────────────────────────────
 
-def _walkthrough_banner(site_code: str, dh: str, notes: list, carryover: list = None):
+def _walkthrough_banner(site_code: str, dh: str, notes: list, carryover: list = None,
+                         visited: int = 0, total_racks: int = 0,
+                         started_at: str = None):
     """Persistent header printed at the top of every walkthrough screen."""
     count   = len(notes)
     pending = sum(1 for c in (carryover or []) if c.get("status") == "pending")
@@ -121,6 +284,36 @@ def _walkthrough_banner(site_code: str, dh: str, notes: list, carryover: list = 
     if pending:
         line2 += f"  {DIM}│{RESET}  {YELLOW}{BOLD}{pending}{RESET} {DIM}unverified from last shift{RESET}"
     print(line2)
+
+    # Progress + ETA line
+    if total_racks > 0:
+        remaining = total_racks - visited
+        # ~30 sec per clean rack, ~2 min per rack with issues
+        elapsed_str = ""
+        if started_at:
+            try:
+                t0 = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                mins = int(elapsed // 60)
+                elapsed_str = f"  {DIM}│  {mins}m elapsed{RESET}"
+            except Exception:
+                pass
+        # ETA: use actual pace if we have data, otherwise default 30s/rack
+        eta_str = ""
+        if visited > 0 and started_at:
+            try:
+                t0 = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                pace = elapsed / visited  # seconds per rack
+                eta_mins = int((remaining * pace) / 60)
+                eta_str = f"  {DIM}│  ~{eta_mins}m remaining{RESET}"
+            except Exception:
+                pass
+        elif remaining > 0:
+            eta_mins = int(remaining * 0.5)  # ~30s default
+            eta_str = f"  {DIM}│  ~{eta_mins}m est.{RESET}"
+        print(f"  {DIM}Visited{RESET}  {BOLD}{visited}{RESET}{DIM}/{total_racks}{RESET}"
+              f"{elapsed_str}{eta_str}")
     print(f"  {DIM}{'─' * 68}{RESET}\n")
 
 
@@ -148,11 +341,47 @@ def _walkthrough_pick_site_dh():
         print(f"  {DIM}Invalid selection.{RESET}")
         return None
 
+    # Fetch data halls from NetBox for this site
+    site_slug = site_code.lower()
+    dh_names = []
     try:
-        dh = input(f"  Data hall (e.g. DH1): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
+        loc_data = _netbox_get("/dcim/locations/",
+                               params={"site": site_slug, "limit": 200})
+        if loc_data and loc_data.get("results"):
+            for loc in loc_data["results"]:
+                name = (loc.get("name") or "").strip()
+                if name:
+                    dh_names.append(name)
+            dh_names.sort()
+    except Exception:
+        pass
+
+    if dh_names:
+        print(f"\n  {BOLD}Select data hall:{RESET}")
+        for i, name in enumerate(dh_names, start=1):
+            print(f"    {BOLD}{i}{RESET}. {name}")
+        try:
+            dh_raw = input(f"\n  DH [1-{len(dh_names)}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if not dh_raw:
+            return None
+        try:
+            dh_idx = int(dh_raw)
+            if 1 <= dh_idx <= len(dh_names):
+                dh = dh_names[dh_idx - 1]
+            else:
+                dh = dh_raw  # fallback to raw input
+        except ValueError:
+            dh = dh_raw  # typed a name like "DH1" directly
+    else:
+        try:
+            dh = input(f"  Data hall (e.g. DH1): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
     if not dh:
         return None
     return (site_code, dh)
@@ -638,10 +867,108 @@ def _walkthrough_post_jira_comment(dev_name: str, note_text: str,
 
 # ── Full annotation flow ──────────────────────────────────────────────────────
 
+_TERMINAL_STATUSES = {"closed", "done", "resolved", "rma", "rma engaged",
+                      "won't do", "wont do", "cancelled", "canceled"}
+
+
+def _walkthrough_attach_photo(jira_key: str, email: str, token: str) -> bool:
+    """Prompt to attach a clipboard screenshot to a Jira ticket.
+
+    Returns True if a photo was successfully attached.
+    """
+    if not _upload_attachment or not jira_key or not email or not token:
+        return False
+    try:
+        raw = input(f"\n  Attach photo to {jira_key}? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if raw != "y":
+        return False
+
+    tmp_path = os.path.join(tempfile.gettempdir(), f"{jira_key}_walkthrough.png")
+    print(f"  {DIM}Reading clipboard image...{RESET}", end="", flush=True)
+    result = subprocess.run(["pngpaste", tmp_path], capture_output=True)
+    if result.returncode != 0:
+        print(f"\r  {YELLOW}No image in clipboard.{RESET}  "
+              f"{DIM}Copy a photo first (iPhone → AirDrop or Cmd+Shift+4), then try again.{RESET}")
+        return False
+    print(f"\r  {DIM}Uploading to {jira_key}...{RESET}                    ", end="", flush=True)
+    if _upload_attachment(jira_key, tmp_path, email, token):
+        print(f"\r  {GREEN}✓ Photo attached to {jira_key}{RESET}                    ")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return True
+    else:
+        print(f"\r  {YELLOW}Upload failed. Check Jira permissions.{RESET}          ")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return False
+
+
 def _walkthrough_annotate_full(dev: dict, rack_label: str,
                                 email: str, token: str,
-                                rack_carryover: list = None) -> dict | None:
-    """Template picker → auto-stamp ongoing → Jira search → return annotation dict."""
+                                rack_carryover: list = None,
+                                dev_hist: list = None,
+                                rack_rma: list = None) -> dict | None:
+    """Jira context → template picker → auto-stamp ongoing → return annotation dict."""
+    dev_name = dev.get("name") or dev.get("display") or ""
+
+    # ── Pre-fetch Jira tickets so user sees context before choosing issue type ──
+    prefetched_issues = []
+    if dev_name and email and token and _post_comment:
+        print(f"\n  {DIM}Checking Jira for {dev_name}...{RESET}", end="", flush=True)
+        prefetched_issues = _search_node_history(dev_name, email, token, limit=5)
+        print(f"\r{'':60}\r", end="")
+
+        if prefetched_issues:
+            print(f"  {DIM}Current tickets:{RESET}")
+            for i, iss in enumerate(prefetched_issues[:3], 1):
+                k  = iss.get("key", "?")
+                st = ((iss.get("fields", {}).get("status") or {}).get("name") or "?")
+                sm = (iss.get("fields", {}).get("summary") or "")[:50]
+                created_ts = (iss.get("fields", {}).get("created") or "")
+                age_secs = _parse_jira_timestamp(created_ts)
+                date_str = created_ts[:10] if created_ts else ""
+                st_color = YELLOW if st.lower() not in _TERMINAL_STATUSES else DIM
+                print(f"  {DIM}{i}.{RESET}  {CYAN}{k}{RESET}  {st_color}[{st}]{RESET}  "
+                      f"{DIM}{date_str}  {sm}{RESET}")
+            if len(prefetched_issues) > 3:
+                print(f"  {DIM}  + {len(prefetched_issues) - 3} more{RESET}")
+            print()
+
+    # ── Trend alert ──────────────────────────────────────────────────────────
+    _walkthrough_show_trend_alert(dev_hist or [], dev_name)
+
+    # ── RMA tracker status for this device ────────────────────────────────
+    if rack_rma:
+        dev_rma = [r for r in rack_rma
+                   if dev_name and dev_name.lower() in r.get("node_name", "").lower()]
+        if dev_rma:
+            rma = dev_rma[0]
+            status_val = rma.get("status", "?")
+            status_color = YELLOW if "awaiting" in status_val.lower() else RED
+            print(f"\n  {RED}{BOLD}⚙  THIS NODE IS IN RMA{RESET}  {status_color}[{status_val}]{RESET}")
+            if rma.get("issue"):
+                print(f"     Issue:     {DIM}{rma['issue']}{RESET}")
+            if rma.get("ho_ticket"):
+                print(f"     Ticket:    {CYAN}{rma['ho_ticket']}{RESET}")
+            reported = rma.get("date_reported", "")
+            age = rma.get("age_days", "")
+            if reported or age:
+                age_str = f" ({age}d)" if age else ""
+                print(f"     Reported:  {DIM}{reported}{age_str}{RESET}")
+            if rma.get("last_updated"):
+                print(f"     Last walk: {DIM}{rma['last_updated']}{RESET}")
+            if rma.get("assigned_to"):
+                print(f"     Assigned:  {DIM}{rma['assigned_to']}{RESET}")
+            if rma.get("notes"):
+                print(f"     Notes:     {DIM}{rma['notes']}{RESET}")
+            print()
+
     result = _walkthrough_pick_template()
     if not result:
         return None
@@ -653,44 +980,52 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
         prior = rack_carryover[0].get("original_note", "")
         note_text = f"[ONGOING] {note_text}  (prev: {prior})"
 
-    # Jira: search first, then show results, then offer to comment
+    # Jira: offer to comment using already-fetched results
     jira_key = None
-    dev_name = dev.get("name") or dev.get("display") or ""
-    if dev_name and email and token:
-        if _post_comment:
-            print(f"\n  {DIM}Searching Jira for {dev_name}...{RESET}", end="", flush=True)
-            issues = _search_node_history(dev_name, email, token, limit=5)
-            print(f"\r{'':60}\r", end="")
+    if prefetched_issues:
+        all_closed = all(
+            ((i.get("fields", {}).get("status") or {}).get("name") or "").lower()
+            in _TERMINAL_STATUSES
+            for i in prefetched_issues
+        )
 
-            if not issues:
-                print(f"  {DIM}No Jira ticket found for this device.{RESET}")
-            else:
-                # Show top result inline, full list on demand
-                top = issues[0]
-                top_key    = top.get("key", "?")
-                top_sum    = (top.get("fields", {}).get("summary") or "")[:55]
-                top_status = ((top.get("fields", {}).get("status") or {}).get("name") or "?")
-                print(f"\n  {DIM}Jira:{RESET}  {CYAN}{BOLD}{top_key}{RESET}  "
-                      f"{DIM}[{top_status}]{RESET}  {top_sum}")
-                if len(issues) > 1:
-                    print(f"  {DIM}  + {len(issues) - 1} more ticket(s){RESET}")
+        top = prefetched_issues[0]
+        top_key    = top.get("key", "?")
+        top_sum    = (top.get("fields", {}).get("summary") or "")[:55]
+        top_status = ((top.get("fields", {}).get("status") or {}).get("name") or "?")
 
-                try:
-                    raw = input(f"\n  Comment on {top_key}? [y/n/?]: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    raw = "n"
+        if all_closed:
+            print(f"\n  {DIM}Jira: {top_key} [{top_status}] — all tickets closed, skipping{RESET}")
+        else:
+            print(f"\n  {DIM}Jira:{RESET}  {CYAN}{BOLD}{top_key}{RESET}  "
+                  f"{DIM}[{top_status}]{RESET}  {top_sum}")
+            if len(prefetched_issues) > 1:
+                print(f"  {DIM}  + {len(prefetched_issues) - 1} more ticket(s){RESET}")
 
-                if raw == "y":
-                    ts   = datetime.now(timezone.utc).strftime(_DISPLAY_FMT)
-                    body = f"[Walkthrough] {note_text}\n\nDevice: {dev_name}\nTime: {ts}"
-                    if _post_comment(top_key, body, email, token):
-                        jira_key = top_key
-                        print(f"  {GREEN}✓ Commented on {top_key}{RESET}")
-                    else:
-                        print(f"  {DIM}Comment failed.{RESET}")
-                elif raw == "?":
-                    # Show full list and let them pick
-                    jira_key = _walkthrough_post_jira_comment(dev_name, note_text, email, token)
+            try:
+                raw = input(f"\n  Comment on {top_key}? [y/n/?]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                raw = "n"
+
+            if raw == "y":
+                ts   = datetime.now(timezone.utc).strftime(_DISPLAY_FMT)
+                body = f"[Walkthrough] {note_text}\n\nDevice: {dev_name}\nTime: {ts}"
+                if _post_comment(top_key, body, email, token):
+                    jira_key = top_key
+                    print(f"  {GREEN}✓ Commented on {top_key}{RESET}")
+                else:
+                    print(f"  {DIM}Comment failed.{RESET}")
+            elif raw == "?":
+                # Show full list and let them pick
+                jira_key = _walkthrough_post_jira_comment(dev_name, note_text, email, token)
+
+    # Capture RMA ticket number if this device has one
+    rma_ticket = None
+    if rack_rma:
+        dev_rma = [r for r in rack_rma
+                   if dev_name and dev_name.lower() in r.get("node_name", "").lower()]
+        if dev_rma and dev_rma[0].get("ho_ticket"):
+            rma_ticket = dev_rma[0]["ho_ticket"]
 
     annotation = {
         "rack":        rack_label,
@@ -701,6 +1036,7 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
         "note":        note_text,
         "ongoing":     ongoing,
         "jira_key":    jira_key,
+        "rma_ticket":  rma_ticket,
         "timestamp":   datetime.now(timezone.utc).strftime(_ISO_FMT),
     }
     ongoing_tag = f"  {YELLOW}[ONGOING]{RESET}" if ongoing else ""
@@ -716,13 +1052,24 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
 def _walkthrough_build_report(notes: list, session: dict,
                                carryover: list = None,
                                checklist: dict = None,
-                               history: list = None) -> str:
+                               history: list = None,
+                               rma_by_rack: dict = None) -> str:
     """Build a plain-text walkthrough report with optional checklist and carryover."""
     site     = session.get("site_code", "?")
     dh       = session.get("dh", "?")
     started  = session.get("started_at", "?")
     finished = datetime.now(timezone.utc).strftime(_ISO_FMT)
     tech     = session.get("tech", "")
+
+    # Compute duration
+    duration_str = ""
+    try:
+        t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        t1 = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        mins = int((t1 - t0).total_seconds() // 60)
+        duration_str = f"{mins} min"
+    except Exception:
+        pass
 
     lines = [
         "WALKTHROUGH REPORT",
@@ -735,10 +1082,26 @@ def _walkthrough_build_report(notes: list, session: dict,
     lines += [
         f"Started:  {started}",
         f"Finished: {finished}",
+    ]
+    if duration_str:
+        lines.append(f"Duration: {duration_str}")
+    lines += [
         f"Notes:    {len(notes)}",
         "=" * 60,
         "",
     ]
+
+    # Issue type summary
+    if notes:
+        type_counts: dict[str, int] = {}
+        for n in notes:
+            t = n.get("issue_type") or "Other"
+            type_counts[t] = type_counts.get(t, 0) + 1
+        lines.append("ISSUE SUMMARY")
+        lines.append("─" * 40)
+        for itype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+            lines.append(f"  {itype:<32}  {count}×")
+        lines.append("")
 
     # Checklist section
     if checklist:
@@ -767,6 +1130,50 @@ def _walkthrough_build_report(notes: list, session: dict,
                 lines.append(f"  [{status_label}]  {c.get('rack', '?')}  {c['original_note']}{fn}")
         lines.append("")
 
+    # RMA verification summary
+    if rma_by_rack:
+        verified = []
+        not_checked = []
+        for rack, items in sorted(rma_by_rack.items()):
+            for rma in items:
+                ws = rma.get("walkthrough_status")
+                node = rma.get("node_name", "?")
+                if ws:
+                    verified.append(f"  {rack:<8}  {node:<36}  {ws}")
+                else:
+                    not_checked.append(f"  {rack:<8}  {node:<36}  not checked")
+        if verified or not_checked:
+            lines.append("RMA VERIFICATION")
+            lines.append("─" * 40)
+            for v in verified:
+                lines.append(v)
+            for nc in not_checked:
+                lines.append(nc)
+            lines.append("")
+
+    # Needs follow-up — ongoing items surfaced before per-rack detail
+    ongoing = [n for n in notes if "[ONGOING]" in n.get("note", "")]
+    if ongoing:
+        lines.append("NEEDS FOLLOW-UP  (ongoing from previous shift)")
+        lines.append("─" * 40)
+        for n in ongoing:
+            rack   = n.get("rack", "?")
+            device = n.get("device_name", "?")
+            issue  = n.get("issue_type") or n.get("note", "?")
+            detail = n.get("note", "")
+            lines.append(f"  {rack:<8}  {device}")
+            lines.append(f"           {issue}")
+            if detail and detail != issue:
+                lines.append(f"           {detail}")
+            tickets = []
+            if n.get("jira_key"):
+                tickets.append(n["jira_key"])
+            if n.get("rma_ticket"):
+                tickets.append(n["rma_ticket"])
+            if tickets:
+                lines.append(f"           Ticket: {', '.join(tickets)}")
+        lines.append("")
+
     # New annotations grouped by rack
     if notes:
         lines.append("TODAY'S ANNOTATIONS")
@@ -784,8 +1191,13 @@ def _walkthrough_build_report(notes: list, session: dict,
                 lines.append(f"  │   Issue:  {issue}")
                 if detail and detail != issue:
                     lines.append(f"  │   Detail: {detail}")
+                tickets = []
                 if n.get("jira_key"):
-                    lines.append(f"  │   Jira:   {n['jira_key']} (commented)")
+                    tickets.append(n["jira_key"])
+                if n.get("rma_ticket"):
+                    tickets.append(n["rma_ticket"])
+                if tickets:
+                    lines.append(f"  │   Ticket: {', '.join(tickets)}")
                 lines.append(f"  │   Time:   {n.get('timestamp', '?')}")
                 lines.append(f"  │")
         lines.append("")
@@ -820,6 +1232,7 @@ def _walkthrough_build_report(notes: list, session: dict,
         lines += [
             f"Carryover total:   {len(carryover)}",
             f"  No issue found:  {counts[_STATUS_RESOLVED]}",
+            f"  Not visited:     {counts[_STATUS_SKIPPED]}",
             f"  Still present:   {counts[_STATUS_PERSISTENT]}",
             f"  Worsened:        {counts[_STATUS_WORSENED]}",
         ]
@@ -827,10 +1240,347 @@ def _walkthrough_build_report(notes: list, session: dict,
     return "\n".join(lines)
 
 
+# ── HTML report builder (Concept A — Operations Brief) ────────────────────────
+
+def _he(s: str) -> str:
+    """Minimal HTML escape."""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _walkthrough_build_html(notes: list, session: dict,
+                             carryover: list = None,
+                             history: list = None) -> str:
+    """Generate a self-contained Concept A HTML report from walkthrough data."""
+    site     = session.get("site_code", "?")
+    dh       = session.get("dh", "?")
+    started  = session.get("started_at", "?")
+    tech     = session.get("tech", "")
+    finished = datetime.now(timezone.utc).strftime(_ISO_FMT)
+
+    duration_str = ""
+    try:
+        t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        t1 = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        duration_str = f"{int((t1 - t0).total_seconds() // 60)} min"
+    except Exception:
+        pass
+
+    date_str = started[:10] if len(started) >= 10 else "?"
+    time_range = f"{started[11:16]} – {finished[11:16]} UTC" if len(started) >= 16 else ""
+
+    # Issue type counts
+    type_counts: dict[str, int] = {}
+    for n in notes:
+        t = n.get("issue_type") or "Other"
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    # Ongoing notes
+    ongoing_notes = [n for n in notes if "[ONGOING]" in n.get("note", "")]
+
+    # Carryover counts
+    c_counts = _count_carryover(carryover) if carryover else {}
+
+    # Trending
+    trending = []
+    if history:
+        trending = _walkthrough_detect_trends(history, min_count=2)
+
+    # ── HTML ──────────────────────────────────────────────────────────────────
+    def _issue_class(issue_type: str) -> str:
+        t = (issue_type or "").lower()
+        if "bmc" in t or "idrac" in t:    return "critical"
+        if "power" in t:                   return "warn"
+        if "cdu" in t or "cool" in t:     return "cdu"
+        return "info"
+
+    def _badge(is_ongoing: bool) -> str:
+        cls = "ongoing badge-pulse" if is_ongoing else "new"
+        label = "Ongoing" if is_ongoing else "New"
+        return f'<span class="a-badge {cls}">{label}</span>'
+
+    def _status_badge(status: str) -> str:
+        s = status.lower() if status else ""
+        label = {"active": "Active", "staged": "Staged"}.get(s, _he(status))
+        return f'<span class="a-badge staged">{label}</span>'
+
+    def _carry_status_html(c: dict) -> str:
+        st = c.get("status", "")
+        fn = c.get("followup_note", "")
+        if st == _STATUS_RESOLVED:
+            return '<span class="a-carry-status">Visited · Clear</span>'
+        if st == _STATUS_SKIPPED:
+            return '<span class="a-carry-status skipped">Not visited</span>'
+        if st == _STATUS_PERSISTENT:
+            return '<span class="a-carry-status skipped">Still present</span>'
+        if st == _STATUS_WORSENED:
+            return '<span class="a-carry-status" style="color:#D93025">Worsened</span>'
+        return '<span class="a-carry-status skipped">Pending</span>'
+
+    # Build issue type stat cells
+    stat_cells = ""
+    for itype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+        css = _issue_class(itype)
+        stat_cells += (
+            f'<div class="a-type-cell {css}">'
+            f'<div class="a-type-n" data-counter="{count}">{count}</div>'
+            f'<div class="a-type-label">{_he(itype)}</div>'
+            f'</div>'
+        )
+
+    # Build annotation rows
+    annot_rows = ""
+    for n in notes:
+        rack    = _he(n.get("rack", "?"))
+        device  = _he(n.get("device_name", "?"))
+        issue   = _he(n.get("issue_type") or n.get("note", "?"))
+        detail  = _he(n.get("note", ""))
+        ongoing = "[ONGOING]" in n.get("note", "")
+        status  = n.get("status", "")
+        jira    = n.get("jira_key", "")
+        detail_line = f'<div class="a-detail">{detail}</div>' if detail and detail != issue else ""
+        jira_line   = f'<div class="a-detail" style="margin-top:3px;font-style:normal;font-size:0.75rem;">Jira: {_he(jira)}</div>' if jira else ""
+        annot_rows += (
+            f'<div class="a-annot reveal">'
+            f'<div class="a-rack">{rack}</div>'
+            f'<div class="a-annot-body">'
+            f'<div class="a-device">{device}&nbsp;<span style="font-size:0.72rem;font-weight:400;color:var(--cw-sub);">[{_he(status)}]</span></div>'
+            f'<div class="a-detail">{issue}</div>'
+            f'{detail_line}{jira_line}'
+            f'</div>'
+            f'<div>{_badge(ongoing)}</div>'
+            f'</div>'
+        )
+
+    # Build carryover rows
+    carry_rows = ""
+    if carryover:
+        for c in carryover:
+            carry_rows += (
+                f'<div class="a-carry-row reveal">'
+                f'<div class="a-carry-rack">{_he(c.get("rack","?"))}</div>'
+                f'<div class="a-carry-note">{_he(c.get("original_note",""))}</div>'
+                f'{_carry_status_html(c)}'
+                f'</div>'
+            )
+
+    # Build trending rows
+    trend_rows = ""
+    for t in trending:
+        recent = t["events"][-3:]
+        issues = " → ".join(_he(e.get("issue_type") or e.get("note", "?")) for e in recent)
+        dates  = ", ".join(_he(e.get("date", "?")) for e in recent)
+        trend_rows += (
+            f'<div class="a-annot reveal" style="grid-template-columns:68px 1fr auto;">'
+            f'<div class="a-rack">{_he(t["rack"])}</div>'
+            f'<div class="a-annot-body">'
+            f'<div class="a-device">{_he(t["device_name"])}</div>'
+            f'<div class="a-detail">{issues} · {dates}</div>'
+            f'</div>'
+            f'<div><span class="a-badge staged">{t["count"]}×</span></div>'
+            f'</div>'
+        )
+
+    # Footer stat counters
+    rack_count = len({n.get("rack") for n in notes})
+    footer_html = (
+        f'<div class="a-footer-stat"><span class="a-footer-n" data-counter="{rack_count}">{rack_count}</span>racks visited</div>'
+        f'<div class="a-footer-stat"><span class="a-footer-n" data-counter="{len(notes)}">{len(notes)}</span>new annotations</div>'
+    )
+    if carryover:
+        total_c = len(carryover)
+        footer_html += f'<div class="a-footer-stat"><span class="a-footer-n" data-counter="{total_c}">{total_c}</span>carryover</div>'
+    if duration_str:
+        footer_html += f'<div class="a-footer-stat"><span class="a-footer-n">{_he(duration_str)}</span>duration</div>'
+
+    trending_section = ""
+    if trend_rows:
+        trending_section = f"""
+  <div class="a-section-head reveal">Trending Issues</div>
+  {trend_rows}"""
+
+    carry_section = ""
+    if carry_rows:
+        total_c  = len(carryover)
+        resolved = c_counts.get(_STATUS_RESOLVED, 0)
+        skipped  = c_counts.get(_STATUS_SKIPPED, 0)
+        carry_section = f"""
+  <div class="a-section-head reveal">Carryover
+    <span class="a-section-count">{total_c} items · {resolved} cleared · {skipped} not visited</span>
+  </div>
+  {carry_rows}"""
+
+    tech_line = f"Tech: <span class='a-meta-val'>{_he(tech)}</span>&emsp;" if tech else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walkthrough Report — {_he(site)} / {_he(dh)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Source+Serif+4:ital,wght@0,300;0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root {{
+  --cw-bg:#FFFFFF; --cw-text:#0A0F1E; --cw-sub:#4A5568;
+  --cw-blue:#2040E8; --cw-blue-mid:#4060F0; --cw-blue-light:#8099F8;
+  --cw-blue-mist:#D0D8FA; --cw-border:#E8ECF8; --cw-navy:#0A0F1E;
+  --sev-critical:#D93025; --sev-warn:#E8750A; --sev-cdu:#7C3AED;
+  --ease-out-expo:cubic-bezier(0.16,1,0.3,1);
+  --ease-out-quart:cubic-bezier(0.25,1,0.5,1);
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--cw-bg);color:var(--cw-text);font-family:system-ui,"Helvetica Neue",sans-serif}}
+.wrap{{max-width:860px;margin:0 auto;padding:48px 40px 80px}}
+.reveal{{opacity:0;transform:translateY(20px);transition:opacity .55s var(--ease-out-expo),transform .55s var(--ease-out-expo)}}
+.reveal.visible{{opacity:1;transform:translateY(0)}}
+@keyframes prism-in{{from{{opacity:0;transform:translateX(40px)}}to{{opacity:1;transform:translateX(0)}}}}
+.pi{{animation:prism-in .7s var(--ease-out-expo) both}}
+.pd1{{animation-delay:.1s}}.pd2{{animation-delay:.2s}}.pd3{{animation-delay:.3s}}.pd4{{animation-delay:.4s}}
+@keyframes pulse-badge{{0%,100%{{box-shadow:0 0 0 0 rgba(217,48,37,.4)}}50%{{box-shadow:0 0 0 5px rgba(217,48,37,0)}}}}
+.badge-pulse{{animation:pulse-badge 2.4s ease-in-out infinite}}
+.a-banner{{background:var(--cw-navy);color:#fff;padding:28px 32px;position:relative;overflow:hidden}}
+.a-prisms{{position:absolute;top:-20px;right:-20px;width:220px;height:130px;pointer-events:none}}
+.a-prism{{position:absolute;clip-path:polygon(20% 0%,100% 0%,80% 100%,0% 100%)}}
+.ap1{{width:160px;height:100px;top:0;right:0;background:var(--cw-blue);opacity:.85}}
+.ap2{{width:120px;height:80px;top:10px;right:40px;background:var(--cw-blue-mid);opacity:.65}}
+.ap3{{width:90px;height:65px;top:18px;right:68px;background:var(--cw-blue-light);opacity:.45}}
+.ap4{{width:62px;height:52px;top:24px;right:92px;background:var(--cw-blue-mist);opacity:.3}}
+.a-banner-inner{{display:flex;justify-content:space-between;align-items:flex-end}}
+.a-site-label{{font-family:'Bebas Neue',sans-serif;font-size:2.2rem;letter-spacing:.06em;line-height:1;position:relative;z-index:1}}
+.a-banner-sub{{font-family:system-ui,sans-serif;font-size:.67rem;letter-spacing:.14em;text-transform:uppercase;opacity:.5;margin-top:5px;position:relative;z-index:1}}
+.a-doc-id{{font-family:system-ui,sans-serif;font-size:.7rem;opacity:.5;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px;position:relative;z-index:1}}
+.a-meta-bar{{background:var(--cw-blue-mist);border:1px solid var(--cw-border);border-top:none;padding:9px 28px;font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;color:var(--cw-sub);margin-bottom:36px;font-family:system-ui,sans-serif}}
+.a-meta-val{{font-weight:700;color:var(--cw-blue)}}
+.a-section-head{{font-family:'Bebas Neue',sans-serif;font-size:1.3rem;letter-spacing:.06em;border-bottom:2px solid var(--cw-blue);padding-bottom:4px;margin-bottom:16px;margin-top:36px;display:flex;justify-content:space-between;align-items:baseline}}
+.a-section-count{{font-family:system-ui,sans-serif;font-size:.72rem;font-weight:500;color:var(--cw-sub)}}
+.a-type-row{{display:flex;margin-bottom:28px;border:1px solid var(--cw-border)}}
+.a-type-cell{{flex:1;padding:14px 16px;border-right:1px solid var(--cw-border)}}
+.a-type-cell:last-child{{border-right:none}}
+.a-type-n{{font-family:'Bebas Neue',sans-serif;font-size:2.4rem;line-height:1}}
+.a-type-label{{font-family:system-ui,sans-serif;font-size:.64rem;text-transform:uppercase;letter-spacing:.09em;color:var(--cw-sub);margin-top:3px}}
+.critical .a-type-n{{color:var(--sev-critical)}}.warn .a-type-n{{color:var(--sev-warn)}}
+.info .a-type-n{{color:var(--cw-blue)}}.cdu .a-type-n{{color:var(--sev-cdu)}}
+.a-annot{{display:grid;grid-template-columns:68px 1fr auto;border-bottom:1px solid var(--cw-border);padding:12px 0;align-items:start;transition:background .15s}}
+.a-annot:hover{{background:#f8f9ff;margin:0 -4px;padding:12px 4px}}
+.a-rack{{font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:.04em;color:var(--cw-blue)}}
+.a-annot-body{{padding-right:14px}}
+.a-device{{font-size:.8rem;font-weight:600;margin-bottom:2px;font-family:system-ui,sans-serif}}
+.a-detail{{font-size:.82rem;font-style:italic;color:var(--cw-sub);line-height:1.5}}
+.a-badge{{font-size:.58rem;font-family:system-ui,sans-serif;text-transform:uppercase;letter-spacing:.1em;padding:2px 7px;border:1px solid;white-space:nowrap;margin-top:3px;display:inline-block}}
+.a-badge.ongoing{{border-color:var(--sev-critical);color:var(--sev-critical)}}
+.a-badge.new{{border-color:var(--cw-blue);color:var(--cw-blue)}}
+.a-badge.staged{{border-color:var(--cw-border);color:var(--cw-sub)}}
+.a-carry-row{{display:flex;gap:16px;padding:8px 0;border-bottom:1px solid var(--cw-border);font-size:.8rem;align-items:baseline;font-family:system-ui,sans-serif}}
+.a-carry-rack{{width:56px;font-weight:700;flex-shrink:0;color:var(--cw-blue)}}
+.a-carry-note{{flex:1;color:var(--cw-sub);font-style:italic}}
+.a-carry-status{{font-size:.63rem;text-transform:uppercase;letter-spacing:.08em;color:#16a34a;flex-shrink:0;font-weight:600}}
+.a-carry-status.skipped{{color:var(--cw-sub);font-weight:400}}
+.a-footer{{margin-top:40px;padding-top:16px;border-top:2px solid var(--cw-blue);display:flex;justify-content:space-between;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;font-family:system-ui,sans-serif;color:var(--cw-sub)}}
+.a-footer-stat{{text-align:center}}
+.a-footer-n{{font-family:'Bebas Neue',sans-serif;font-size:2rem;display:block;line-height:1;color:var(--cw-text)}}
+@media(prefers-reduced-motion:reduce){{
+  *,.reveal{{animation:none!important;transition:none!important;opacity:1!important;transform:none!important}}
+}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="a-banner">
+    <div class="a-prisms">
+      <div class="a-prism ap1 pi pd1"></div>
+      <div class="a-prism ap2 pi pd2"></div>
+      <div class="a-prism ap3 pi pd3"></div>
+      <div class="a-prism ap4 pi pd4"></div>
+    </div>
+    <div class="a-banner-inner">
+      <div>
+        <div class="a-site-label">{_he(site)} / {_he(dh)}</div>
+        <div class="a-banner-sub">Data Hall Walkthrough Report</div>
+      </div>
+      <div class="a-doc-id">
+        <span>{_he(date_str)}</span>
+        <span>{_he(time_range)}</span>
+        {f"<span>{_he(duration_str)}</span>" if duration_str else ""}
+      </div>
+    </div>
+  </div>
+
+  <div class="a-meta-bar reveal">
+    {tech_line}
+    Racks visited: <span class="a-meta-val">{rack_count}</span>&emsp;
+    Annotations: <span class="a-meta-val">{len(notes)}</span>&emsp;
+    {f"Carryover: <span class='a-meta-val'>{len(carryover)} items</span>" if carryover else ""}
+  </div>
+
+  <div class="a-section-head reveal">Issue Breakdown
+    <span class="a-section-count">{len(notes)} total</span>
+  </div>
+  <div class="a-type-row reveal">{stat_cells}</div>
+
+  <div class="a-section-head reveal">Today's Annotations</div>
+  {annot_rows}
+
+  {carry_section}
+  {trending_section}
+
+  <div class="a-footer reveal">{footer_html}</div>
+
+</div>
+<script>
+const obs = new IntersectionObserver(entries => {{
+  entries.forEach(e => {{
+    if (!e.isIntersecting) return;
+    e.target.classList.add('visible');
+    e.target.querySelectorAll('[data-counter]').forEach(animateCounter);
+    if (e.target.hasAttribute('data-counter')) animateCounter(e.target);
+    obs.unobserve(e.target);
+  }});
+}}, {{threshold: 0.1}});
+document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+// Also trigger immediately for elements already in view
+document.querySelectorAll('.reveal').forEach(el => {{
+  const r = el.getBoundingClientRect();
+  if (r.top < window.innerHeight) el.classList.add('visible');
+}});
+function animateCounter(el) {{
+  const target = parseInt(el.dataset.counter);
+  if (isNaN(target)) return;
+  const start = performance.now();
+  const update = now => {{
+    const p = Math.min((now - start) / 700, 1);
+    const e = 1 - Math.pow(1 - p, 4);
+    el.textContent = Math.round(e * target);
+    if (p < 1) requestAnimationFrame(update);
+    else el.textContent = target;
+  }};
+  requestAnimationFrame(update);
+}}
+</script>
+</body>
+</html>"""
+
+
+def _walkthrough_open_html(notes: list, session: dict,
+                            carryover: list = None,
+                            history: list = None) -> bool:
+    """Build HTML report, write to fixed path, open in browser. Returns True on success."""
+    try:
+        html = _walkthrough_build_html(notes, session, carryover, history)
+        with open(_WALKTHROUGH_HTML_PATH, "w") as f:
+            f.write(html)
+        subprocess.run(["open", _WALKTHROUGH_HTML_PATH], check=True)
+        return True
+    except Exception as e:
+        return False
+
+
 # ── Finish screen ─────────────────────────────────────────────────────────────
 
 def _walkthrough_finish(notes: list, session: dict, state: dict,
-                         carryover: list = None, checklist: dict = None):
+                         carryover: list = None, checklist: dict = None,
+                         rma_by_rack: dict = None):
     """Generate report, save to fixed path, offer copy / view."""
     _clear_screen()
     site = session.get("site_code", "?")
@@ -849,7 +1599,8 @@ def _walkthrough_finish(notes: list, session: dict, state: dict,
     _walkthrough_save_to_history(state, notes, session)
     history = state.get("walkthrough_history", [])
 
-    report = _walkthrough_build_report(notes, session, carryover, checklist, history)
+    report = _walkthrough_build_report(notes, session, carryover, checklist, history,
+                                       rma_by_rack=rma_by_rack)
 
     try:
         with open(_WALKTHROUGH_REPORT_PATH, "w") as f:
@@ -872,9 +1623,24 @@ def _walkthrough_finish(notes: list, session: dict, state: dict,
               f"  {DIM}— see report for details{RESET}")
     print()
 
+    # Build pasteable RMA update lines (tab-separated for Google Sheets)
+    rma_paste_lines = []
+    if rma_by_rack:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for rack, items in sorted((rma_by_rack or {}).items()):
+            for rma in items:
+                ws = rma.get("walkthrough_status")
+                if ws:
+                    node = rma.get("node_name", "?")
+                    rma_paste_lines.append(f"{rack}\t{node}\t{ws}\t{today}")
+    has_rma_updates = bool(rma_paste_lines)
+
     while True:
         print(f"  {BOLD}c{RESET}  copy to clipboard")
         print(f"  {BOLD}v{RESET}  view report")
+        print(f"  {BOLD}o{RESET}  open in browser")
+        if has_rma_updates:
+            print(f"  {BOLD}r{RESET}  copy RMA updates (tab-separated, {len(rma_paste_lines)} row(s))")
         print(f"  {BOLD}ENTER{RESET}  return to menu\n")
         try:
             act = input(f"  Action: ").strip().lower()
@@ -887,13 +1653,42 @@ def _walkthrough_finish(notes: list, session: dict, state: dict,
                 print(f"  {GREEN}Copied to clipboard.{RESET}\n")
             except Exception as e:
                 print(f"  {DIM}Clipboard failed: {e}{RESET}\n")
+        elif act == "r" and has_rma_updates:
+            rma_text = "\n".join(rma_paste_lines)
+            try:
+                subprocess.run(["pbcopy"], input=rma_text.encode(), check=True)
+                print(f"  {GREEN}Copied {len(rma_paste_lines)} RMA update(s) to clipboard.{RESET}")
+                print(f"  {DIM}Paste into the Device tracker/RMA sheet.{RESET}\n")
+            except Exception as e:
+                print(f"  {DIM}Clipboard failed: {e}{RESET}")
+                print(f"\n{rma_text}\n")
+        elif act == "o":
+            ok = _walkthrough_open_html(notes, session, carryover, history)
+            if ok:
+                print(f"  {GREEN}Opened in browser.{RESET}  {DIM}{_WALKTHROUGH_HTML_PATH}{RESET}\n")
+            else:
+                print(f"  {DIM}Could not open browser — check that 'open' is available.{RESET}\n")
         elif act == "v":
             _clear_screen()
             print()
             for line in report.splitlines():
                 print(f"  {line}")
             print()
-            input(f"  ENTER to go back: ")
+            while True:
+                print(f"  {BOLD}c{RESET}  copy to clipboard")
+                print(f"  {BOLD}ENTER{RESET}  go back\n")
+                try:
+                    sub = input(f"  Action: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if sub == "c":
+                    try:
+                        subprocess.run(["pbcopy"], input=report.encode(), check=True)
+                        print(f"  {GREEN}Copied to clipboard.{RESET}\n")
+                    except Exception as e:
+                        print(f"  {DIM}Clipboard failed: {e}{RESET}\n")
+                elif sub == "":
+                    break
             _clear_screen()
             print(f"\n  {BOLD}{GREEN}◉  WALKTHROUGH MODE{RESET}  "
                   f"{DIM}{'─' * 48}{RESET}")
@@ -1086,32 +1881,6 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
         carryover = []
         checklist = {}
 
-        # ── Pre-shift checklist ───────────────────────────────────────────────
-        print()
-        try:
-            do_checklist = input(
-                f"  Run pre-shift checklist? [y/N]: "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            do_checklist = "n"
-        if do_checklist == "y":
-            checklist = _walkthrough_run_checklist(site_code, dh)
-            state["walkthrough_checklist"] = checklist
-
-        # ── Carryover import ──────────────────────────────────────────────────
-        print()
-        try:
-            do_carryover = input(
-                f"  Load yesterday's findings as carryover? [y/N]: "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            do_carryover = "n"
-        if do_carryover == "y":
-            carryover = _walkthrough_import_carryover_ui(site_code, dh)
-            state["walkthrough_carryover"] = carryover
-            # Write imported items into history so they count toward trend detection
-            _walkthrough_carryover_to_history(carryover, session, state)
-
     site_slug = site_code.lower()
 
     # ── Pre-fetch rack index from NetBox once ─────────────────────────────────
@@ -1119,15 +1888,60 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
     print(f"\n  {BOLD}{GREEN}◉  WALKTHROUGH MODE{RESET}  {DIM}Loading racks from NetBox...{RESET}")
     rack_lookup: dict[str, dict] = {}
     try:
-        dh_racks = _netbox_get("/dcim/racks/",
-                               params={"site": site_slug, "location": dh.lower(), "limit": 1000})
-        results = (dh_racks or {}).get("results", [])
+        # Resolve the actual NetBox location slug/ID for this DH.
+        # User may type "DH1" but NetBox slug could be "dh1", "dh-1", etc.
+        dh_lower = dh.lower()
+        location_id = None
+        loc_data = _netbox_get("/dcim/locations/",
+                               params={"site": site_slug, "limit": 200})
+        if loc_data and loc_data.get("results"):
+            # Try exact slug match first, then name-contains match
+            for loc in loc_data["results"]:
+                slug = (loc.get("slug") or "").lower()
+                name = (loc.get("name") or "").lower()
+                if slug == dh_lower or name == dh_lower:
+                    location_id = loc["id"]
+                    break
+            if location_id is None:
+                # Fuzzy: strip separators and compare (dh-1 vs dh1)
+                dh_stripped = dh_lower.replace("-", "").replace("_", "").replace(" ", "")
+                for loc in loc_data["results"]:
+                    slug = (loc.get("slug") or "").lower().replace("-", "").replace("_", "")
+                    name = (loc.get("name") or "").lower().replace("-", "").replace("_", "").replace(" ", "")
+                    if slug == dh_stripped or name == dh_stripped:
+                        location_id = loc["id"]
+                        break
+        results = []
+        if location_id is not None:
+            dh_racks = _netbox_get("/dcim/racks/",
+                                   params={"site": site_slug, "location_id": location_id, "limit": 1000})
+            results = (dh_racks or {}).get("results", [])
+        else:
+            # Try raw slug as fallback (original behavior)
+            dh_racks = _netbox_get("/dcim/racks/",
+                                   params={"site": site_slug, "location": dh_lower, "limit": 1000})
+            results = (dh_racks or {}).get("results", [])
+
         if not results:
             all_racks = _netbox_get("/dcim/racks/",
                                     params={"site": site_slug, "limit": 1000})
             results = (all_racks or {}).get("results", [])
         for r in results:
             rack_lookup[r.get("name", "")] = r
+
+        # ── Post-filter: keep only racks whose NetBox location matches the selected DH ──
+        if rack_lookup:
+            dh_stripped = dh.lower().replace("-", "").replace("_", "").replace(" ", "")
+            filtered = {}
+            for rname, robj in rack_lookup.items():
+                loc = robj.get("location") or {}
+                loc_name = (loc.get("name") or "").lower().replace("-", "").replace("_", "").replace(" ", "")
+                loc_slug = (loc.get("slug") or "").lower().replace("-", "").replace("_", "")
+                if loc_name == dh_stripped or loc_slug == dh_stripped:
+                    filtered[rname] = robj
+            if filtered:
+                rack_lookup = filtered
+            # If no racks matched the DH filter, keep all (avoid empty walkthrough)
     except Exception:
         pass
 
@@ -1137,6 +1951,48 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
         return state
 
     print(f"  {DIM}{len(rack_lookup)} rack(s) loaded.{RESET}")
+
+    # ── Pre-walk brief: open Jira tickets in this DH ──────────────────────────
+    _walkthrough_prewalk_brief(site_code, dh, email, token)
+
+    # ── Pre-fetch RMA tracker data for this DH ──────────────────────────────
+    _STALE_THRESHOLD_SECS = 8 * 3600  # 8 hours
+    rma_by_rack: dict = {}
+    if _get_rma_data and _rma_available():
+        print(f"  {DIM}Loading RMA tracker...{RESET}", end="", flush=True)
+        try:
+            rma_by_rack = _get_rma_data(dh) or {}
+        except Exception:
+            rma_by_rack = {}
+        rma_count = sum(len(v) for v in rma_by_rack.values())
+        print(f"\r{'':60}\r", end="")
+        age = _rma_file_age()
+        age_secs = _rma_file_age_secs()
+        stale = age_secs > _STALE_THRESHOLD_SECS
+        if rma_count:
+            if stale:
+                print(f"  {YELLOW}{BOLD}{rma_count}{RESET} {YELLOW}node(s) in RMA tracker across "
+                      f"{len(rma_by_rack)} rack(s)  (CSV: {age} — STALE){RESET}")
+                print(f"  {YELLOW}Type 'sheet' to download a fresh copy{RESET}")
+            else:
+                print(f"  {RED}{BOLD}{rma_count}{RESET} {DIM}node(s) in RMA tracker across "
+                      f"{len(rma_by_rack)} rack(s)  (CSV: {age}){RESET}")
+        elif stale:
+            print(f"  {YELLOW}RMA tracker CSV is {age} — consider downloading a fresh copy{RESET}")
+    else:
+        if _get_rma_data and not _rma_available():
+            print(f"  {YELLOW}RMA tracker: no CSV in Downloads.{RESET}")
+            try:
+                dl = input(f"  Open the Device tracker/RMA to download? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                dl = "n"
+            if dl != "n":
+                try:
+                    subprocess.Popen(["open", _RMA_SHEET_URL],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    print(f"  {DIM}Opening sheet... download the CSV, then restart walkthrough.{RESET}")
+                except Exception:
+                    print(f"  {DIM}{_RMA_SHEET_URL}{RESET}")
 
     # Pre-build device→history lookup once (history doesn't change during session)
     _wt_history = state.get("walkthrough_history", [])
@@ -1159,13 +2015,42 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
     time.sleep(0.7)
 
     # ── Main prompt loop ──────────────────────────────────────────────────────
+    _visited_set: set = set()
+    _started_ts = session.get("started_at", "")
     while True:
         _clear_screen()
-        _walkthrough_banner(site_code, dh, notes, carryover)
+        _walkthrough_banner(site_code, dh, notes, carryover,
+                             visited=len(_visited_set), total_racks=len(rack_lookup),
+                             started_at=_started_ts)
 
         # Build sorted pending list — used for numbered shortcuts
         pending_items = [c for c in carryover if c.get("status") == "pending"]
         pending_sorted = sorted(pending_items, key=_rack_sort_key)
+
+        # ── Skip guide: show which racks need attention vs clean ─────────
+        flagged_racks: set = set()
+        for c in carryover:
+            if c.get("status") == "pending" and c.get("rack"):
+                flagged_racks.add(c["rack"])
+        for rk in rma_by_rack:
+            flagged_racks.add(rk)
+        # Racks already annotated this session
+        visited_racks = {n.get("rack") for n in notes if n.get("rack")}
+        clean_count = len(rack_lookup) - len(flagged_racks - visited_racks)
+        needs_attn = sorted(flagged_racks - visited_racks, key=lambda r: r)
+        if needs_attn:
+            # Show issue count per rack
+            rack_labels = []
+            for rk in needs_attn:
+                count = len(rma_by_rack.get(rk, []))
+                co_count = sum(1 for c in carryover
+                               if c.get("rack") == rk and c.get("status") == "pending")
+                total = count + co_count
+                rack_labels.append(f"{rk} ({total})" if total else rk)
+            print(f"  {DIM}Already tracked ({RESET}{YELLOW}{BOLD}{len(needs_attn)}{RESET}{DIM}):{RESET}  "
+                  f"{YELLOW}{', '.join(rack_labels)}{RESET}")
+            print(f"  {GREEN}{BOLD}{clean_count}{RESET}{DIM} racks are clean.{RESET}")
+            print()
 
         if pending_sorted:
             print(f"  {YELLOW}⚠  From last walkthrough — type # to verify:{RESET}\n")
@@ -1175,10 +2060,151 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 print(f"    {BOLD}{idx:>2}{RESET}.  {CYAN}{rack}{RESET}  {DIM}{note}{RESET}")
             print()
 
+        print(f"  {DIM}[{RESET}{CYAN}sheet{RESET}{DIM}]  Device tracker/RMA{RESET}")
+        print(f"  {DIM}[{RESET}{CYAN}map{RESET}{DIM}]    Overhead map{RESET}")
+        if needs_attn:
+            print(f"  {DIM}[{RESET}{CYAN}verify{RESET}{DIM}] Cycle through {len(needs_attn)} flagged rack(s){RESET}")
+        print()
+
         try:
-            raw = input(f"  # or rack # (or 'done' / 'list' / 'q'): ").strip().lower()
+            raw = input(f"  # or rack # (or 'done' / 'list' / 'sheet' / 'q'): ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             raw = "q"
+
+        # ── Open Google Sheets ────────────────────────────────────────────────
+        if raw == "sheet":
+            try:
+                subprocess.Popen(["open", _RMA_SHEET_URL],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"  {DIM}Opening Device tracker/RMA...{RESET}")
+            except Exception:
+                print(f"  {DIM}{_RMA_SHEET_URL}{RESET}")
+            time.sleep(1)
+            continue
+
+        if raw == "map":
+            try:
+                subprocess.Popen(["open", _OVERHEAD_MAP_URL],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"  {DIM}Opening Overhead map...{RESET}")
+            except Exception:
+                print(f"  {DIM}{_OVERHEAD_MAP_URL}{RESET}")
+            time.sleep(1)
+            continue
+
+        # ── Verify mode: auto-cycle through flagged racks ─────────────────
+        if raw == "verify" and needs_attn:
+            verify_queue = []
+            for rk in needs_attn:
+                m = _re.search(r'\d+', rk)
+                if m:
+                    verify_queue.append(int(m.group()))
+            if verify_queue:
+                print(f"  {CYAN}Verify mode: cycling through {len(verify_queue)} flagged rack(s)...{RESET}")
+                time.sleep(0.8)
+                for vr_num in verify_queue:
+                    vr_label = f"R{vr_num:03d}"
+                    vr_obj = (rack_lookup.get(vr_label) or
+                              rack_lookup.get(str(vr_num)) or
+                              rack_lookup.get(str(vr_num).zfill(3)))
+                    if not vr_obj:
+                        continue
+                    vr_devices = _netbox_get_rack_devices(vr_obj["id"])
+                    vr_racked = [d for d in vr_devices if d.get("position") is not None]
+                    _visited_set.add(vr_label)
+                    _now_ts = datetime.now(timezone.utc).strftime(_ISO_FMT)
+                    for _c in carryover:
+                        if _c.get("rack") == vr_label and _c.get("status") == "pending":
+                            _c["status"]     = "resolved"
+                            _c["checked_at"] = _now_ts
+                            _c["followup_note"] = "visited — no new issue noted"
+                    state["walkthrough_carryover"] = carryover
+
+                    # Show rack screen
+                    _verify_done = False
+                    while not _verify_done:
+                        _clear_screen()
+                        _walkthrough_banner(site_code, dh, notes, carryover,
+                             visited=len(_visited_set), total_racks=len(rack_lookup),
+                             started_at=_started_ts)
+                        remaining = verify_queue[verify_queue.index(vr_num):]
+                        print(f"  {CYAN}{BOLD}VERIFY MODE{RESET}  {DIM}{len(remaining)} rack(s) remaining{RESET}\n")
+                        print(f"  {BOLD}{vr_label}{RESET}  {DIM}— {len(vr_racked)} device(s){RESET}\n")
+
+                        vr_carryover = [c for c in carryover if c.get("rack") == vr_label]
+                        if vr_carryover:
+                            print(f"  {YELLOW}{'━' * 60}{RESET}")
+                            print(f"  {YELLOW}{BOLD}⚠  FLAGGED IN LAST WALKTHROUGH:{RESET}")
+                            for c in vr_carryover:
+                                print(f"     {BOLD}→{RESET}  {c['original_note']}")
+                            print(f"  {YELLOW}{'━' * 60}{RESET}")
+                            print()
+
+                        vr_rack_rma = rma_by_rack.get(vr_label, [])
+                        if vr_rack_rma:
+                            print(f"  {RED}{BOLD}⚙  RMA TRACKER — {len(vr_rack_rma)} node(s):{RESET}")
+                            for rma in vr_rack_rma:
+                                print(f"  {BOLD}{rma.get('node_name', '?')}{RESET}"
+                                      f"  {DIM}[{rma.get('status', '?')}]{RESET}")
+                                if rma.get("issue"):
+                                    print(f"    {DIM}{rma['issue']}{RESET}")
+                            print()
+
+                        for i, d in enumerate(vr_racked, start=1):
+                            name = d.get("name") or d.get("display") or "?"
+                            status = (d.get("status") or {}).get("label", "?")
+                            pos = d.get("position")
+                            pos_s = str(int(pos)) if isinstance(pos, (int, float)) else str(pos or "?")
+                            print(f"    {BOLD}{i:2}{RESET}.  RU{pos_s:>3}  {name:<32}  {DIM}[{status}]{RESET}")
+
+                        print(f"\n  {DIM}ENTER = looks good, next rack  ·  # = annotate device  ·  r = rack note  ·  x = exit verify{RESET}")
+                        try:
+                            vr_input = input(f"\n  Device #: ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            vr_input = "x"
+
+                        if not vr_input:
+                            _verify_done = True
+                        elif vr_input.lower() == "x":
+                            _verify_done = True
+                            verify_queue.clear()
+                        elif vr_input.lower() == "r":
+                            rack_dev = {"name": vr_label, "display": vr_label,
+                                        "position": None, "status": {"label": "Rack"}}
+                            ann = _walkthrough_annotate_full(rack_dev, vr_label, email, token,
+                                                             rack_carryover=vr_carryover,
+                                                             rack_rma=vr_rack_rma)
+                            if ann:
+                                notes.append(ann)
+                                for item in vr_carryover:
+                                    if item.get("status") == "pending":
+                                        item["status"] = "persistent"
+                                        item["checked_at"] = datetime.now(timezone.utc).strftime(_ISO_FMT)
+                                        item["followup_note"] = ann.get("note", "")
+                                state["walkthrough_carryover"] = carryover
+                                _walkthrough_save_notes(state, notes, session)
+                        else:
+                            try:
+                                dev_idx = int(vr_input)
+                                if 1 <= dev_idx <= len(vr_racked):
+                                    dev = vr_racked[dev_idx - 1]
+                                    ann = _walkthrough_annotate_full(dev, vr_label, email, token,
+                                                                      rack_carryover=vr_carryover,
+                                                                      dev_hist=_dev_hist_map.get(
+                                                                          dev.get("name") or dev.get("display") or "", []),
+                                                                      rack_rma=vr_rack_rma)
+                                    if ann:
+                                        notes.append(ann)
+                                        for item in vr_carryover:
+                                            if item.get("status") == "pending":
+                                                item["status"] = "persistent"
+                                                item["checked_at"] = datetime.now(timezone.utc).strftime(_ISO_FMT)
+                                                item["followup_note"] = ann.get("note", "")
+                                        state["walkthrough_carryover"] = carryover
+                                        _walkthrough_save_notes(state, notes, session)
+                            except ValueError:
+                                pass
+            continue
 
         # ── Quit ──────────────────────────────────────────────────────────────
         if raw in ("q", "quit"):
@@ -1218,20 +2244,23 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 # Mark all unvisited as resolved with note
                 _ts = datetime.now(timezone.utc).strftime(_ISO_FMT)
                 for item in never_visited:
-                    item["status"]       = "resolved"
+                    item["status"]       = _STATUS_SKIPPED
                     item["checked_at"]   = _ts
-                    item["followup_note"] = "not visited this shift — assumed no issue"
+                    item["followup_note"] = "not visited this shift"
                 state["walkthrough_carryover"] = carryover
                 _walkthrough_save_notes(state, notes, session)
 
-            _walkthrough_finish(notes, session, state, carryover, checklist)
+            _walkthrough_finish(notes, session, state, carryover, checklist,
+                                rma_by_rack=rma_by_rack)
             _clear_screen()
             return state
 
         # ── List annotations ──────────────────────────────────────────────────
         if raw == "list":
             _clear_screen()
-            _walkthrough_banner(site_code, dh, notes, carryover)
+            _walkthrough_banner(site_code, dh, notes, carryover,
+                             visited=len(_visited_set), total_racks=len(rack_lookup),
+                             started_at=_started_ts)
             if notes:
                 print(f"  {BOLD}Today's annotations:{RESET}\n")
                 for n in notes:
@@ -1253,7 +2282,9 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
         # ── Carryover review ──────────────────────────────────────────────────
         if raw in ("carryover", "co", "carry"):
             _clear_screen()
-            _walkthrough_banner(site_code, dh, notes, carryover)
+            _walkthrough_banner(site_code, dh, notes, carryover,
+                             visited=len(_visited_set), total_racks=len(rack_lookup),
+                             started_at=_started_ts)
             if not carryover:
                 print(f"  {DIM}No carryover items loaded.{RESET}\n")
             else:
@@ -1320,6 +2351,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
 
         devices = _netbox_get_rack_devices(rack_obj["id"])
         racked  = [d for d in devices if d.get("position") is not None]
+        _visited_set.add(rack_label)
 
         # Opening this rack = mark any pending carryover here as checked (no issue found yet).
         # Annotating a device will override to "persistent". This is intentional.
@@ -1334,7 +2366,9 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
         # ── Rack screen ───────────────────────────────────────────────────────
         while True:
             _clear_screen()
-            _walkthrough_banner(site_code, dh, notes, carryover)
+            _walkthrough_banner(site_code, dh, notes, carryover,
+                             visited=len(_visited_set), total_racks=len(rack_lookup),
+                             started_at=_started_ts)
             print(f"  {BOLD}{rack_label}{RESET}  {DIM}— {len(racked)} device(s){RESET}\n")
 
             # Show carryover alert for this rack (any status, not just pending)
@@ -1345,6 +2379,36 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 for c in rack_carryover:
                     print(f"     {BOLD}→{RESET}  {c['original_note']}")
                 print(f"  {YELLOW}{'━' * 60}{RESET}")
+                print()
+
+            # Show RMA tracker alert for this rack
+            rack_rma = rma_by_rack.get(rack_label, [])
+            if rack_rma:
+                print(f"  {RED}{BOLD}⚙  RMA TRACKER — {len(rack_rma)} node(s) in this rack:{RESET}")
+                print(f"  {RED}{'━' * 55}{RESET}")
+                for i, rma in enumerate(rack_rma):
+                    status_val = rma.get("status", "?")
+                    status_color = YELLOW if "awaiting" in status_val.lower() else RED
+                    print(f"  {BOLD}{rma.get('node_name', '?')}{RESET}"
+                          f"  {status_color}[{status_val}]{RESET}")
+                    if rma.get("issue"):
+                        print(f"    Issue:     {DIM}{rma['issue']}{RESET}")
+                    if rma.get("ho_ticket"):
+                        print(f"    Ticket:    {CYAN}{rma['ho_ticket']}{RESET}")
+                    reported = rma.get("date_reported", "")
+                    age = rma.get("age_days", "")
+                    if reported or age:
+                        age_str = f" ({age}d)" if age else ""
+                        print(f"    Reported:  {DIM}{reported}{age_str}{RESET}")
+                    if rma.get("last_updated"):
+                        print(f"    Last walk: {DIM}{rma['last_updated']}{RESET}")
+                    if rma.get("assigned_to"):
+                        print(f"    Assigned:  {DIM}{rma['assigned_to']}{RESET}")
+                    if rma.get("notes"):
+                        print(f"    Notes:     {DIM}{rma['notes']}{RESET}")
+                    if i < len(rack_rma) - 1:
+                        print(f"  {DIM}{'─' * 55}{RESET}")
+                print(f"  {RED}{'━' * 55}{RESET}")
                 print()
 
             if not racked:
@@ -1380,7 +2444,10 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                     print(f"         {flag}{BOLD}↺ Flagged {count}x{RESET}  "
                           f"{DIM}last: {recent['issue_type']} ({recent['date']}){RESET}")
 
-            print(f"\n  {DIM}ENTER to go back{RESET}")
+            hints = f"ENTER to go back  ·  r = note on whole rack"
+            if rack_rma:
+                hints += f"  ·  u = update RMA status"
+            print(f"\n  {DIM}{hints}{RESET}")
             try:
                 dev_raw = input(f"\n  Device #: ").strip()
             except (EOFError, KeyboardInterrupt):
@@ -1390,20 +2457,57 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 # Carryover already auto-resolved when rack was opened — just leave
                 break
 
-            try:
-                dev_idx = int(dev_raw)
-                if dev_idx < 1 or dev_idx > len(racked):
-                    print(f"  {DIM}Invalid — enter 1–{len(racked)} or ENTER to go back.{RESET}")
-                    time.sleep(0.8)
-                    continue
-                dev = racked[dev_idx - 1]
-            except ValueError:
-                print(f"  {DIM}Enter a device number or ENTER to go back.{RESET}")
-                time.sleep(0.8)
+            # Update RMA status for nodes in this rack
+            if dev_raw.lower() == "u" and rack_rma:
+                for i, rma in enumerate(rack_rma):
+                    node = rma.get("node_name", "?")
+                    cur  = rma.get("status", "?")
+                    print(f"\n  {BOLD}{node}{RESET}  {DIM}[{cur}]{RESET}")
+                    print(f"    {BOLD}1{RESET}. Still present")
+                    print(f"    {BOLD}2{RESET}. Resolved / fixed")
+                    print(f"    {BOLD}3{RESET}. Worse / escalate")
+                    print(f"    {DIM}ENTER to skip{RESET}")
+                    try:
+                        choice = input(f"    Status: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        choice = ""
+                    status_map = {"1": "still present", "2": "resolved", "3": "worsened"}
+                    if choice in status_map:
+                        rma["walkthrough_status"] = status_map[choice]
+                        rma["walkthrough_ts"] = datetime.now(timezone.utc).strftime(_ISO_FMT)
+                        print(f"    {GREEN}Marked: {status_map[choice]}{RESET}")
+                print(f"\n  {DIM}RMA updates saved to walkthrough report.{RESET}")
+                time.sleep(1)
                 continue
 
-            annotation = _walkthrough_annotate_full(dev, rack_label, email, token,
-                                                     rack_carryover=rack_carryover)
+            # Rack-level annotation (no specific device)
+            if dev_raw.lower() == "r":
+                rack_dev = {
+                    "name":     rack_label,
+                    "display":  rack_label,
+                    "position": None,
+                    "status":   {"label": "Rack"},
+                }
+                annotation = _walkthrough_annotate_full(rack_dev, rack_label, email, token,
+                                                         rack_carryover=rack_carryover,
+                                                         rack_rma=rack_rma)
+            else:
+                try:
+                    dev_idx = int(dev_raw)
+                    if dev_idx < 1 or dev_idx > len(racked):
+                        print(f"  {DIM}Invalid — enter 1–{len(racked)} or ENTER to go back.{RESET}")
+                        time.sleep(0.8)
+                        continue
+                    dev = racked[dev_idx - 1]
+                except ValueError:
+                    print(f"  {DIM}Enter a device number, r for rack note, or ENTER to go back.{RESET}")
+                    time.sleep(0.8)
+                    continue
+                annotation = _walkthrough_annotate_full(dev, rack_label, email, token,
+                                                         rack_carryover=rack_carryover,
+                                                         dev_hist=_dev_hist_map.get(
+                                                             dev.get("name") or dev.get("display") or "", []),
+                                                         rack_rma=rack_rma)
             if annotation:
                 notes.append(annotation)
                 # Auto-mark carryover as persistent — issue confirmed still present
@@ -1414,6 +2518,17 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                         item["followup_note"] = annotation.get("note", "")
                 state["walkthrough_carryover"] = carryover
                 _walkthrough_save_notes(state, notes, session)
+
+                # Offer photo attach — use commented ticket or let user type one
+                photo_key = annotation.get("jira_key") or ""
+                if not photo_key and email and token:
+                    try:
+                        typed = input(f"\n  Attach photo? Enter ticket key (or ENTER to skip): ").strip().upper()
+                    except (EOFError, KeyboardInterrupt):
+                        typed = ""
+                    photo_key = typed
+                if photo_key:
+                    _walkthrough_attach_photo(photo_key, email, token)
 
             try:
                 more = input(f"\n  Annotate another device in {rack_label}? [y/N]: ").strip().lower()
