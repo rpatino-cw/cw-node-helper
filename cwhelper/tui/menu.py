@@ -25,7 +25,7 @@ from cwhelper.services.rack import _draw_mini_dh_map
 from cwhelper.services.session_log import _log_event, _print_session_log, _copy_session_to_clipboard, _print_jira_activity
 from cwhelper.services.walkthrough import _walkthrough_mode
 from cwhelper.services.brief import run_shift_brief
-from cwhelper.clients.teleport import _tsh_cluster_status
+from cwhelper.clients.teleport import _tsh_cluster_status, _tsh_kube_context
 from cwhelper.tui.rich_console import _rich_print_menu, console
 
 
@@ -189,9 +189,11 @@ def _interactive_menu():
     # Kick off first stale check immediately in background
     _stale_future = _executor.submit(_fetch_stale_issues)
 
-    # Kick off Teleport cluster status check in background
+    # Kick off Teleport cluster + kube context checks in background
     _cluster_future = _executor.submit(_tsh_cluster_status)
+    _kube_future = _executor.submit(_tsh_kube_context)
     _cluster_online: str | None = None
+    _kube_ctx: str | None = None
     _cluster_last_check: float = time.time()
 
     while True:
@@ -203,9 +205,18 @@ def _interactive_menu():
                 _cluster_online = None
             _cluster_future = None
 
-        # Re-check cluster status every 5 min
+        # Collect completed kube context (non-blocking)
+        if _kube_future and _kube_future.done():
+            try:
+                _kube_ctx = _kube_future.result()
+            except Exception:
+                _kube_ctx = None
+            _kube_future = None
+
+        # Re-check cluster + kube status every 5 min
         if _cluster_future is None and (time.time() - _cluster_last_check) > 300:
             _cluster_future = _executor.submit(_tsh_cluster_status)
+            _kube_future = _executor.submit(_tsh_kube_context)
             _cluster_last_check = time.time()
 
         # Collect completed stale check result (non-blocking)
@@ -294,6 +305,7 @@ def _interactive_menu():
             ai_available=ai_available,
             compact=_menu_compact,
             cluster_status=_cluster_online,
+            kube_context=_kube_ctx,
         )
 
         # --- Check for new tickets from background watcher ---

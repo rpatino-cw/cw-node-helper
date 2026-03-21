@@ -407,6 +407,7 @@ def _rich_print_menu(
     ai_available: bool = False,
     compact: bool = False,
     cluster_status: str | None = None,
+    kube_context: str | None = None,
 ):
     """3D-2D minimal menu: no panels, no section labels, structure from whitespace only."""
 
@@ -431,6 +432,9 @@ def _rich_print_menu(
         t.append("teleport", style="dim")
         t.append("  us-central-07a", style="bold white")
         t.append(f"  {cluster_status}", style=color)
+        if kube_context:
+            t.append("   kube ", style="dim")
+            t.append(kube_context, style="cyan")
         console.print(t)
         console.print()
 

@@ -14,11 +14,13 @@ import subprocess
 import time
 from typing import Optional
 
-__all__ = ['_tsh_available', '_tsh_cluster_status']
+__all__ = ['_tsh_available', '_tsh_cluster_status', '_tsh_kube_context']
 
 _tsh_available_cache: Optional[bool] = None
 _cluster_status_cache: Optional[dict] = None
 _cluster_status_ts: float = 0
+_kube_context_cache: Optional[str] = None
+_kube_context_ts: float = 0
 
 
 def _tsh_available() -> bool:
@@ -64,4 +66,37 @@ def _tsh_cluster_status(cluster: str = "us-central-07a") -> Optional[str]:
         _cluster_status_ts = now
         return lookup.get(cluster)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return None
+
+
+def _tsh_kube_context() -> Optional[str]:
+    """Return the active kube cluster type (e.g. 'mgmt') or None. Cached 5min."""
+    global _kube_context_cache, _kube_context_ts
+    if not _tsh_available():
+        return None
+    now = time.time()
+    if _kube_context_cache is not None and (now - _kube_context_ts) < 300:
+        return _kube_context_cache if _kube_context_cache != "" else None
+    try:
+        r = subprocess.run(
+            ["tsh", "kube", "ls", "--format=json"],
+            capture_output=True, timeout=15, text=True,
+        )
+        if r.returncode != 0:
+            _kube_context_cache = ""
+            _kube_context_ts = now
+            return None
+        clusters = json.loads(r.stdout)
+        for c in clusters:
+            if c.get("selected"):
+                ctype = c.get("labels", {}).get("cluster.coreweave.cloud/type", "")
+                _kube_context_cache = ctype or c.get("kube_cluster_name", "")
+                _kube_context_ts = now
+                return _kube_context_cache
+        _kube_context_cache = ""
+        _kube_context_ts = now
+        return None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        _kube_context_cache = ""
+        _kube_context_ts = now
         return None
