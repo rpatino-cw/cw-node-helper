@@ -1,12 +1,12 @@
 #!/bin/bash
 # ============================================================================
-# watch_queue.sh — macOS notification watcher for US-CENTRAL-07A DO queue
+# watch_queue.sh — macOS notification watcher for US-SITE-01A DO queue
 #
 # Polls your Jira queue every 5 minutes. When a new ticket appears that
 # wasn't there before, pops a macOS notification.
 #
 # Usage:
-#   cd ~/Documents/Random/cw-node-helper
+#   cd ~/Documents/cw-node-helper (old)
 #   source load_env.sh
 #   bash watch_queue.sh
 #
@@ -17,7 +17,7 @@
 #   kill %1   (or close the terminal)
 # ============================================================================
 
-SITE="US-CENTRAL-07A"
+SITE="US-SITE-01A"
 INTERVAL=300  # seconds between checks (5 min)
 STATE_FILE="/tmp/cw-queue-state.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

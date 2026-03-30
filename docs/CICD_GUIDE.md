@@ -26,10 +26,10 @@ STEP 2 — Create a GitHub Repo
 ------------------------------
 Option A: GitHub CLI (if you have `gh` installed):
 
-  gh repo create coreweave/cw-node-helper --private --source=. --push
+  gh repo create YOUR_ORG/cw-node-helper --private --source=. --push
 
 Option B: Manual:
-  1. Go to https://github.com/new (or your CoreWeave GitHub org)
+  1. Go to https://github.com/new (or your your organization GitHub org)
   2. Create a PRIVATE repo called "cw-node-helper"
   3. Don't add README or .gitignore (you already have them)
   4. Copy the remote URL and run:

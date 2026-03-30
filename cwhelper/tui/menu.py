@@ -25,7 +25,9 @@ from cwhelper.services.rack import _draw_mini_dh_map
 from cwhelper.services.session_log import _log_event, _print_session_log, _copy_session_to_clipboard, _print_jira_activity
 from cwhelper.services.walkthrough import _walkthrough_mode
 from cwhelper.services.brief import run_shift_brief
+from cwhelper.services.learn import _run_learn_mode
 from cwhelper.clients.teleport import _tsh_cluster_status
+from cwhelper.clients.fleet import _cwctl_available
 from cwhelper.tui.rich_console import _rich_print_menu, console
 
 
@@ -155,8 +157,8 @@ def _interactive_menu():
         state["bookmarks"] = [
             {"label": "All my tickets", "type": "queue",
              "params": {"site": "", "project": "DO", "status_filter": "open", "mine_only": True}},
-            {"label": "The Elks Open queue", "type": "queue",
-             "params": {"site": "US-CENTRAL-07A", "project": "DO", "status_filter": "open"}},
+            {"label": "Site Open queue", "type": "queue",
+             "params": {"site": os.environ.get("DEFAULT_SITE", ""), "project": "DO", "status_filter": "open"}},
             {"label": "My Verification tickets", "type": "queue",
              "params": {"site": "", "project": "DO", "status_filter": "verification", "mine_only": True}},
         ]
@@ -194,6 +196,10 @@ def _interactive_menu():
     _cluster_online: str | None = None
     _cluster_last_check: float = time.time()
 
+    # Kick off cwctl availability check in background
+    _cwctl_future = _executor.submit(_cwctl_available)
+    _cwctl_ready: bool | None = None
+
     while True:
         # Collect completed cluster status (non-blocking)
         if _cluster_future and _cluster_future.done():
@@ -202,6 +208,14 @@ def _interactive_menu():
             except Exception:
                 _cluster_online = None
             _cluster_future = None
+
+        # Collect cwctl availability (one-shot, no re-check)
+        if _cwctl_future and _cwctl_future.done():
+            try:
+                _cwctl_ready = _cwctl_future.result()
+            except Exception:
+                _cwctl_ready = False
+            _cwctl_future = None
 
         # Re-check cluster status every 5 min
         if _cluster_future is None and (time.time() - _cluster_last_check) > 300:
@@ -274,6 +288,7 @@ def _interactive_menu():
             ("p",  "Start all",    "bulk In Progress"),
             ("l",  "Activity",     "log · Jira"),
             ("w",  "Walkthrough",  "rack-by-rack DH walk"),
+            ("L",  "Learn",        "code quiz game"),
         ]
 
         bookmarks = state.get("bookmarks", [])
@@ -294,6 +309,7 @@ def _interactive_menu():
             ai_available=ai_available,
             compact=_menu_compact,
             cluster_status=_cluster_online,
+            cwctl_available=_cwctl_ready,
         )
 
         # --- Check for new tickets from background watcher ---
@@ -334,7 +350,8 @@ def _interactive_menu():
             else:
                 watcher_hint = f"\n  {DIM}Watching... press ENTER to refresh{RESET}"
         try:
-            choice = input(f"  Select [0-6, b]{bm_hint}, ticket key, or q: {watcher_hint}").strip().lower()
+            _raw_choice = input(f"  Select [0-6, b]{bm_hint}, ticket key, or q: {watcher_hint}").strip()
+            choice = _raw_choice.lower()
         except (EOFError, KeyboardInterrupt):
             _stop_background_watcher()
             print(f"\n\n  {DIM}Goodbye.{RESET}\n")
@@ -528,7 +545,7 @@ def _interactive_menu():
             print()
 
             try:
-                prompt = "  Enter ticket key, service tag, or hostname"
+                prompt = "  Enter ticket key, service tag, hostname, or rack (e.g. R262)"
                 if combined:
                     prompt += f", pick [1-{len(combined)}]"
                 prompt += ", or ENTER to go back: "
@@ -778,7 +795,7 @@ def _interactive_menu():
                 input(f"  {DIM}Press ENTER to return to menu...{RESET}")
                 _clear_screen()
             else:
-                print(f"  {DIM}Could not parse rack location. Expected format: US-EVI01.DH1.R64.RU34{RESET}")
+                print(f"  {DIM}Could not parse rack location. Expected format: US-SITE01.DH1.R64.RU34{RESET}")
 
         # --- 6: Bookmark manager ----------------------------------------------
         elif choice == "6":
@@ -786,7 +803,7 @@ def _interactive_menu():
 
         # --- b: Shift brief — AI priority summary from live queue ------------
         elif choice == "b":
-            _site = state.get("site_filter", "US-CENTRAL-07A")
+            _site = state.get("site_filter", os.environ.get("DEFAULT_SITE", ""))
             run_shift_brief(email, token, site=_site)
             try:
                 input(f"  {DIM}Press ENTER to return to menu...{RESET}")
@@ -854,6 +871,10 @@ def _interactive_menu():
                 print(f"  {YELLOW}{_p_fail} failed{RESET}", end="")
             print()
             _brief_pause(1.5)
+
+        # --- L: Learn mode (code quiz game) ------------------------------------
+        elif _raw_choice == "L":
+            _run_learn_mode()
 
         # --- l: Activity — session log or Jira changelog ----------------------
         elif choice == "l":

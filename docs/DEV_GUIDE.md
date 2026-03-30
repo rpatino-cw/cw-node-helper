@@ -124,8 +124,8 @@ All caches use `_cache_put()` with LRU eviction (oldest entry removed when full)
 |----------|------|---------|----------|
 | `cf[10192]` | Hostname | `d0001142` | k8s node name |
 | `cf[10193]` | Service Tag | `S948338X5A04781` | Hardware serial |
-| `cf[10194]` | Site | `US-CENTRAL-07A` | Data center location |
-| `cf[10207]` | Rack Location | `US-EVI01.DH1.R64.RU34` | Physical position |
+| `cf[10194]` | Site | `US-SITE-01A` | Data center location |
+| `cf[10207]` | Rack Location | `US-SITE01.DH1.R64.RU34` | Physical position |
 | `cf[10191]` | IP Address | `10.0.0.1` | Management IP |
 | `cf[10210]` | Vendor | `Dell` | Hardware manufacturer |
 
@@ -148,7 +148,7 @@ source load_env.sh && python3 get_node_context.py
 python3 get_node_context.py DO-12345
 
 # Queue browse (CLI)
-python3 get_node_context.py queue --site US-CENTRAL-07A --status open --json
+python3 get_node_context.py queue --site US-SITE-01A --status open --json
 
 # Node history
 python3 get_node_context.py history S948338X5A04781

@@ -25,9 +25,9 @@ Steps:
    cp .env.example .env
 
 3. Edit .env and fill in YOUR credentials:
-   - JIRA_EMAIL       → your @coreweave.com email
+   - JIRA_EMAIL       → your @example.com email
    - JIRA_API_TOKEN   → generate at https://id.atlassian.com/manage-profile/security/api-tokens
-   - NETBOX_API_URL   → (optional) https://coreweave.cloud.netboxapp.com/api
+   - NETBOX_API_URL   → (optional) https://netbox.example.com/api
    - NETBOX_API_TOKEN → (optional) your NetBox API token
 
 4. Run it:
@@ -37,8 +37,8 @@ Steps:
 
 What's included:
   - get_node_context.py   — the app (single file)
-  - ib_topology.json      — IB port mappings for EVI01 + CDZ01 (pre-generated)
-  - dh_layouts.json       — data hall rack layouts (EVI01 DH1 + CDZ01 SEC1)
+  - ib_topology.json      — IB port mappings for SITE01 + SITE02 (pre-generated)
+  - dh_layouts.json       — data hall rack layouts (SITE01 DH1 + SITE02 HALL-A)
   - site/index.html       — visual docs (open in browser, or press ? then w)
   - test_integrity.py     — unit tests (python3 test_integrity.py)
   - source/               — IB cutsheet Excel files (reference only, not needed to run)
@@ -46,9 +46,9 @@ What's included:
 Key features:
   - Jira DO/HO ticket lookup with full NetBox enrichment
   - Queue browser with site/status filtering + bookmarks
-  - Rack map (serpentine DH1 + 3-column SEC1)
+  - Rack map (serpentine DH1 + 3-column HALL-A)
   - Rack elevation with adjacent rack neighbors + cab# navigation
-  - IB port connections from cutsheet (EVI01 DH1/DH2 + CDZ01)
+  - IB port connections from cutsheet (SITE01 DH1/DH2 + SITE02)
   - BMC/DPU/NIC connections from NetBox
   - Status transitions (start, verify, hold, resume, close)
   - Add comments to tickets from the terminal

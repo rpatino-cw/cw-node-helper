@@ -24,6 +24,11 @@ Features that are built but disabled due to access issues, bugs, or low priority
 **Code:** `_show_mrb_for_node()` function exists but button hidden when MRB count is 0.
 **Note:** The pre-check queries MRB project; if access is denied, it silently returns 0.
 
+## Snipe-IT Link ([si] button)
+
+**Status:** Active — only shown when asset tag starts with `m` (e.g. `m001023`).
+**Note:** Devices with `S`-prefixed asset tags (e.g. `S029490`) will not show the button. If the URL pattern for `S`-prefixed tags is identified, update `_snipe_url_from_tag()` in `cwhelper/clients/netbox.py` to handle them.
+
 ## IB Grafana Link ([i] button)
 
 **Status:** Shows warning — IB Grafana link not working properly.

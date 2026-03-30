@@ -1074,7 +1074,7 @@ footer .wrap {
 <div class="pitch-bar">
   <div class="wrap">
     <p class="pitch-statement">
-      Every push to <strong>rpatino/cw-node-helper</strong> triggers <span class="hl-accent">automated tests</span> on Python 3.9, 3.11, and 3.13.
+      Every push to <strong>main</strong> triggers <span class="hl-accent">automated tests</span> on Python 3.9, 3.11, and 3.13.
       Tag a version &rarr; a <span class="hl-green">clean zip</span> is built and published as a GitHub Release. No manual steps.
     </p>
   </div>
@@ -1183,12 +1183,12 @@ footer .wrap {
 <span class="t-dim"># 2. Stage + commit</span>
 <span class="t-cyan">$</span> git add get_node_context.py
 <span class="t-cyan">$</span> git commit -m <span class="t-green">"feat: add SDA to search projects"</span>
-<span class="t-dim">  [rpatino/cw-node-helper f1d4c6e] feat: add SDA...</span>
+<span class="t-dim">  [main f1d4c6e] feat: add SDA...</span>
 <span class="t-dim">  1 file changed, 3 insertions(+)</span>
 
 <span class="t-dim"># 3. Push to GitHub</span>
 <span class="t-cyan">$</span> git push
-<span class="t-green">  &#x2192; rpatino/cw-node-helper</span>  <span class="t-dim">pushed</span>
+<span class="t-green">  &#x2192; main</span>  <span class="t-dim">pushed</span>
 <span class="t-dim">  CI will start running now...</span></div>
       </div>
 
@@ -1200,7 +1200,7 @@ footer .wrap {
           <span class="terminal-title">what happens next</span>
         </div>
         <div class="terminal-body"><span class="t-yellow">GitHub Actions detected push</span>
-<span class="t-dim">  branch: rpatino/cw-node-helper</span>
+<span class="t-dim">  branch: main</span>
 <span class="t-dim">  commit: f1d4c6e</span>
 
 <span class="t-blue">Spinning up test runners...</span>
@@ -1261,7 +1261,7 @@ footer .wrap {
   <span class="t-blue">push:</span>
     branches:
       - <span class="t-green">main</span>
-      - <span class="t-green">rpatino/cw-node-helper</span>
+      - <span class="t-green">main</span>
   <span class="t-blue">pull_request:</span>
     <span class="t-dim"># all PRs get tested</span></div>
         </div>
@@ -1322,7 +1322,7 @@ footer .wrap {
 <span class="t-cyan">$</span> git tag <span class="t-yellow">v6.3.0</span>
 
 <span class="t-dim"># 4. Push code + tag together</span>
-<span class="t-cyan">$</span> git push origin rpatino/cw-node-helper --tags
+<span class="t-cyan">$</span> git push origin main --tags
 
 <span class="t-yellow">&#x279C; GitHub Actions:</span>
   <span class="t-blue">1.</span> Runs tests on Python 3.13    <span class="t-green">&#x2713; passed</span>
@@ -1331,7 +1331,7 @@ footer .wrap {
   <span class="t-blue">4.</span> Auto-generates changelog       <span class="t-green">&#x2713; done</span>
 
 <span class="t-green t-bold">Release live at:</span>
-<span class="t-cyan">github.com/coreweave/TopoWeave/releases/latest</span></div>
+<span class="t-cyan">github.com/your-org/node-helper/releases/latest</span></div>
     </div>
 
     <div class="section-label reveal" style="margin-top: 3rem; margin-bottom: 1.5rem;">What's in the zip</div>
@@ -1557,9 +1557,9 @@ footer .wrap {
         <div class="share-step-content">
           <h3>Download the release zip</h3>
           <p>Go to the GitHub Releases page and download <strong>cw-node-helper.zip</strong>:</p>
-          <div class="share-cmd">https://github.com/coreweave/TopoWeave/releases/latest</div>
+          <div class="share-cmd">https://github.com/your-org/node-helper/releases/latest</div>
           <p>Or if you have the <code>gh</code> CLI:</p>
-          <div class="share-cmd">gh release download --repo coreweave/TopoWeave --pattern "*.zip"</div>
+          <div class="share-cmd">gh release download --repo your-org/node-helper --pattern "*.zip"</div>
           <p class="friendly-note">If the repo is private, they'll need to run "gh auth login" first (one time).</p>
         </div>
       </div>
@@ -1671,14 +1671,14 @@ footer .wrap {
   <div class="wrap">
     <div class="section-label">Future Migration</div>
     <h2>When your own repo is approved</h2>
-    <p class="section-desc">Currently hosted as a branch on <strong>coreweave/TopoWeave</strong>. When the dedicated <strong>coreweave/cw-node-helper</strong> repo is approved, migrate in 3 commands.</p>
+    <p class="section-desc">Currently hosted as a branch on <strong>your-org/node-helper</strong>. When the dedicated <strong>your-org/cw-node-helper</strong> repo is approved, migrate in 3 commands.</p>
 
     <div class="migrate-commands reveal" style="max-width: 700px;">
       <div class="migrate-cmd">
         <div class="migrate-num">1</div>
         <div>
           <p>Point to the new repo</p>
-          <code>git remote set-url origin git@github.com:coreweave/cw-node-helper.git</code>
+          <code>git remote set-url origin git@github.com:your-org/cw-node-helper.git</code>
         </div>
       </div>
 
@@ -1700,7 +1700,7 @@ footer .wrap {
     </div>
 
     <div class="tip-box reveal" style="margin-top: 1.5rem; max-width: 700px;">
-      <strong>CI/CD carries over.</strong> The workflow files are already in the repo. Just update <code>ci.yml</code> to trigger on <code>main</code> instead of <code>rpatino/cw-node-helper</code> and you're done.
+      <strong>CI/CD carries over.</strong> The workflow files are already in the repo. Just update <code>ci.yml</code> to trigger on <code>main</code> instead of <code>main</code> and you're done.
     </div>
   </div>
 </section>
@@ -1714,7 +1714,7 @@ footer .wrap {
       <strong>cw-node-helper</strong> CI/CD Guide &mdash; built by Raoko
     </div>
     <div class="footer-right">
-      Branch: rpatino/cw-node-helper @ coreweave/TopoWeave
+      Branch: main @ your-org/node-helper
     </div>
   </div>
 </footer>

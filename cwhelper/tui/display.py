@@ -241,7 +241,18 @@ def _print_sla_detail(ctx: dict):
     diag_links = ctx.get("diag_links") or []
     _diag_text = " ".join(d.get("label", "") for d in diag_links)
 
-    if _cat_tag == "POWER_CYCLE" or "power cycle" in _s_low or "power drain" in _s_low:
+    # Check HO context for recable/verification phase
+    _ho_hint = (ho.get("hint", "") if ho else "").lower()
+    _ho_status = (ho.get("status", "") if ho else "").lower()
+    _is_recable = (
+        "recable" in _ho_hint
+        or "sent to dct rc" in _ho_status
+        or "ready for verification" in _ho_status
+    )
+
+    if _is_recable:
+        ticket_category = "RECABLE_VERIFY"
+    elif _cat_tag == "POWER_CYCLE" or "power cycle" in _s_low or "power drain" in _s_low:
         ticket_category = "POWER_CYCLE"
     elif _cat_tag == "PSU_RESEAT" or "psu" in _s_low or "power supply" in _s_low or "psu-health" in _diag_text:
         ticket_category = "PSU_RESEAT"
@@ -268,6 +279,29 @@ def _print_sla_detail(ctx: dict):
 
     # Category display labels and descriptions
     _CATEGORY_INFO = {
+        "RECABLE_VERIFY": {
+            "label": "RECABLE / VERIFICATION",
+            "color": CYAN,
+            "verify_tips": [
+                "Verify serial number matches NetBox \u2014 `ipmitool fru` or BMC web UI vs NB asset tag",
+                "Ping BMC + OS IP \u2014 both must be reachable before closing",
+                "Check Grafana node_details for GPU count, NVMe count, memory \u2014 all expected?",
+                "Run HPC verification tests if B200 (Gamble engine) \u2014 press [vr] or `cwhelper verify`",
+                "Confirm IB links are up and healthy (check [n] connections view)",
+                "Compare firmware versions (BMC, BIOS, PSU FW) against fleet baseline \u2014 flag mismatches",
+                "If node was RMA'd: confirm replacement part serial in NetBox matches physical label",
+            ],
+            "work_tips": [
+                "Check for a linked Recable DO \u2014 it has the cable list and port assignments",
+                "Verify serial number on the physical chassis matches NetBox asset tag",
+                "Plug all cables per the Recable DO or cutsheet \u2014 power, network, IB, BMC/OOB",
+                "Seat cables firmly \u2014 check SFP click, power cord latch, IB connector lock",
+                "Power on and confirm BMC comes up \u2014 check iDRAC/IPMI via BMC IP",
+                "Verify OS boots and node is reachable on management network",
+                "If cabling doesn't match DO \u2014 comment discrepancy, don't guess",
+                "Check LEDs: amber/red on NIC, PSU, or drive = stop and investigate before closing",
+            ],
+        },
         "POWER_CYCLE": {
             "label": "POWER CYCLE",
             "color": YELLOW,
@@ -844,7 +878,7 @@ def _print_sla_detail(ctx: dict):
     print(f"    {DIM}After 24\u201348h clean: close. After days/weeks: close or escalate.{RESET}")
     print()
     print(f"  {BOLD}Stale Ticket Escalation{RESET}")
-    print(f"    {DIM}1. Post in your site ops channel (e.g. #ops-us-central-07a-...){RESET}")
+    print(f"    {DIM}1. Post in your site ops channel (e.g. #ops-us-site-01a-...){RESET}")
     print(f"    {DIM}   with a list of DOs \u226530 days in Verification.{RESET}")
     print(f"    {DIM}2. For each: note what you verified (power, cabling, diags).{RESET}")
     print(f"    {DIM}3. Ping the owning engineer/SOE by name \u2014 don\u2019t just wait.{RESET}")
@@ -912,7 +946,7 @@ def _print_help():
     """Display a full help guide explaining every menu option and hotkey."""
     print(f"""
   {BOLD}{CYAN}{'━' * 54}{RESET}
-  {BOLD}{WHITE}  Quick Guide — CoreWeave DCT Node Helper{RESET}
+  {BOLD}{WHITE}  Quick Guide — DCT Node Helper{RESET}
   {BOLD}{CYAN}{'━' * 54}{RESET}
 
   {BOLD}{WHITE}WHAT'S NEW  {RESET}{DIM}v{APP_VERSION}{RESET}

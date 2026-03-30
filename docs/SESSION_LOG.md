@@ -67,7 +67,7 @@ Started with zero code. Ended with a ~900 line interactive CLI tool that pulls d
 ## Data Sources
 
 ### Jira Cloud (required)
-- Base URL: https://coreweave.atlassian.net
+- Base URL: https://your-org.atlassian.net
 - Auth: JIRA_EMAIL + JIRA_API_TOKEN (basic auth)
 - Endpoints:
   - GET /rest/api/3/issue/{key}
@@ -78,21 +78,21 @@ Started with zero code. Ended with a ~900 line interactive CLI tool that pulls d
 |---|---|---|
 | cf[10193] | Service Tag | S948338X5608239 |
 | cf[10192] | Hostname | S029489 |
-| cf[10194] | Site | US-CENTRAL-07A |
-| cf[10207] | Rack Location | US-EVI01.DH1.R248.RU18 |
+| cf[10194] | Site | US-SITE-01A |
+| cf[10207] | Rack Location | US-SITE01.DH1.R248.RU18 |
 | cf[10191] | IP Address | 0.0.0.0 |
 | cf[10210] | Vendor | Supermicro |
 | cf[10010] | Service Request Info | Portal URL |
 
 ### NetBox (optional)
-- URL: https://coreweave.cloud.netboxapp.com/api (production)
+- URL: https://netbox.example.com/api (production)
 - Auth: Token-based (NETBOX_API_TOKEN)
 - Endpoints:
   - GET /dcim/devices/?serial=X or ?name=X
   - GET /dcim/interfaces/?device_id=X
 
 ### Known Sites (from real tickets)
-- US-CENTRAL-07A (Elk Grove)
+- US-SITE-01A (Site A)
 - US-EAST-03
 - US-EAST-03A
 - US-PHX01 (Phoenix)
@@ -104,7 +104,7 @@ Started with zero code. Ended with a ~900 line interactive CLI tool that pulls d
 - Jira deprecated GET /rest/api/3/search → switched to POST /rest/api/3/search/jql
 - "DO" is a reserved JQL word → must be quoted as "DO"
 - Site filter: switched from ~ (fuzzy) to = (exact match) because ~ tokenizes on hyphens
-- NetBox URL: production is coreweave.cloud.netboxapp.com, NOT coreweave-dev
+- NetBox URL: production is netbox.example.com, NOT the dev instance
 - Python 3.9 compatibility: added `from __future__ import annotations` for str | None syntax
 - Grafana dashboards key off k8s node name, not hostname → use var-search parameter
 
@@ -123,7 +123,7 @@ cw-node-helper/
 ## Planned for v6 (next session)
 1. Action summary with pre/post checks (derived from summary + comments keywords)
 2. Ticket age / staleness indicator (from fields.created/updated)
-3. Location parsing: split rack_location (US-EVI01.DH1.R64.RU34) into locode/DH/rack/RU
+3. Location parsing: split rack_location (US-SITE01.DH1.R64.RU34) into locode/DH/rack/RU
 4. Inline node history snippet in detail view
 5. Dual-homing hints in connections (A side / B side)
 6. Docs/SOP shortcut links (placeholders)

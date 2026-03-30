@@ -3,11 +3,11 @@ CW-NODE-HELPER — TODO
 
 [ ] Backup this folder (cp -r to external drive or iCloud)
 [ ] Move out of Random/ into ~/Documents/cw-node-helper/
-[ ] Request a repo through CoreWeave's proper process (ask manager or platform eng)
+[ ] Request a repo through your organization's proper process (ask manager or platform eng)
 [ ] git init + first commit (once repo is approved)
 [ ] Rotate Jira + NetBox API tokens (current ones touched .env)
 [ ] chmod 600 .env
-[ ] Push to approved CoreWeave repo (follow org Git workflow)
+[ ] Push to approved your organization repo (follow org Git workflow)
 [ ] pip install -e . and confirm `cwhelper` command works
 [ ] Test on a fresh terminal (source load_env.sh && cwhelper)
 [ ] Show to manager — "built a tool, saves X min per ticket"

@@ -1,10 +1,11 @@
-"""CW Node Helper — CoreWeave DCT terminal companion."""
+"""CW Node Helper — DCT terminal companion."""
 from cwhelper.config import *  # noqa: F401,F403
 from cwhelper.cache import *  # noqa: F401,F403
 from cwhelper.state import *  # noqa: F401,F403
 from cwhelper.clients.jira import *  # noqa: F401,F403
 from cwhelper.clients.netbox import *  # noqa: F401,F403
 from cwhelper.clients.grafana import *  # noqa: F401,F403
+from cwhelper.clients.fleet import *  # noqa: F401,F403
 from cwhelper.services.context import *  # noqa: F401,F403
 from cwhelper.services.search import *  # noqa: F401,F403
 from cwhelper.services.notifications import *  # noqa: F401,F403
@@ -16,8 +17,10 @@ from cwhelper.services.weekend import *  # noqa: F401,F403
 from cwhelper.services.walkthrough import *  # noqa: F401,F403
 from cwhelper.services.bookmarks import *  # noqa: F401,F403
 from cwhelper.services.rack import *  # noqa: F401,F403
+from cwhelper.services.ib_trace import *  # noqa: F401,F403
 from cwhelper.tui.display import *  # noqa: F401,F403
 from cwhelper.tui.connection_view import *  # noqa: F401,F403
+from cwhelper.tui.ib_trace_view import *  # noqa: F401,F403
 from cwhelper.tui.actions import *  # noqa: F401,F403
 from cwhelper.tui.menu import *  # noqa: F401,F403
 from cwhelper.cli import *  # noqa: F401,F403

@@ -590,15 +590,15 @@ footer {
         <strong>A Mac laptop</strong> &mdash; the tool runs in Terminal. Windows works too with WSL, but this guide covers Mac.
       </li>
       <li>
-        <strong>Your CoreWeave email</strong> &mdash; something like <code>yourname@coreweave.com</code>
+        <strong>Your work email</strong> &mdash; something like <code>yourname@example.com</code>
       </li>
       <li>
         <strong>A GitHub account</strong> &mdash; if you don't have one, sign up free at
         <a href="https://github.com/signup" target="_blank">github.com/signup</a>.
-        Use your CoreWeave email so your team can identify you.
+        Use your work email so your team can identify you.
       </li>
       <li>
-        <strong>Access to the CoreWeave GitHub org + the TopoWeave repo</strong> &mdash; this is the most important one and the most common blocker. See the check below.
+        <strong>Access to the GitHub org + the node-helper repo</strong> &mdash; this is the most important one and the most common blocker. See the check below.
       </li>
     </ol>
   </div>
@@ -606,7 +606,7 @@ footer {
   <div class="callout callout-warn">
     <div class="callout-header"><span class="callout-icon">&#9888;</span> Do this FIRST &mdash; check your repo access</div>
     <p style="margin-bottom: 0.75rem;">Open this link in your browser while logged into GitHub:</p>
-    <p style="margin-bottom: 0.75rem;"><a href="https://github.com/coreweave/TopoWeave" target="_blank">github.com/coreweave/TopoWeave</a></p>
+    <p style="margin-bottom: 0.75rem;"><a href="https://github.com/your-org/node-helper" target="_blank">github.com/your-org/node-helper</a></p>
     <p style="margin-bottom: 0.5rem;"><strong>What you should see:</strong> A page with files and folders (code). If you see this, you're good &mdash; keep going.</p>
     <p style="margin-bottom: 0.5rem;"><strong>What means you DON'T have access:</strong></p>
     <ul style="margin: 0; padding-left: 1.2rem; color: var(--text);">
@@ -614,7 +614,7 @@ footer {
       <li><strong>"403 Forbidden"</strong> &mdash; you're logged in but not authorized</li>
       <li>The page loads but says <strong>"Private repository"</strong> with no files</li>
     </ul>
-    <p style="margin-top: 0.75rem; margin-bottom: 0;"><strong>If you don't have access:</strong> You need to be added to the <code>coreweave</code> GitHub organization. Ask your manager or Ricky to invite your GitHub username. Once invited, you'll get an email from GitHub &mdash; <strong>you must click "Accept invitation"</strong> in that email before you can see the repo. This can take a few minutes.</p>
+    <p style="margin-top: 0.75rem; margin-bottom: 0;"><strong>If you don't have access:</strong> You need to be added to your GitHub organization. Ask your manager or Ricky to invite your GitHub username. Once invited, you'll get an email from GitHub &mdash; <strong>you must click "Accept invitation"</strong> in that email before you can see the repo. This can take a few minutes.</p>
   </div>
 
   <div class="callout callout-danger">
@@ -759,7 +759,7 @@ footer {
   </div>
 
   <h3>Tell Git who you are</h3>
-  <p>Replace the name and email with <strong>your actual name and CoreWeave email</strong>:</p>
+  <p>Replace the name and email with <strong>your actual name and work email</strong>:</p>
   <div class="terminal">
     <div class="terminal-chrome">
       <span class="terminal-dot"></span>
@@ -768,7 +768,7 @@ footer {
       <span class="terminal-title">Terminal &mdash; use YOUR real name and email</span>
     </div>
     <pre><span class="prompt">$</span> <span class="cmd">git config --global user.name "<span class="hl">Your Name</span>"</span>
-<span class="prompt">$</span> <span class="cmd">git config --global user.email "<span class="hl">your.name@coreweave.com</span>"</span></pre>
+<span class="prompt">$</span> <span class="cmd">git config --global user.email "<span class="hl">your.name@example.com</span>"</span></pre>
   </div>
 </section>
 
@@ -895,7 +895,7 @@ footer {
         <span class="terminal-dot"></span>
         <span class="terminal-title">Terminal</span>
       </div>
-      <pre><span class="prompt">$</span> <span class="cmd">ssh-keygen -t ed25519 -C "<span class="hl">your.name@coreweave.com</span>"</span></pre>
+      <pre><span class="prompt">$</span> <span class="cmd">ssh-keygen -t ed25519 -C "<span class="hl">your.name@example.com</span>"</span></pre>
     </div>
 
     <p>It will ask where to save the file. <strong>Just press Enter</strong> to accept the default. It will ask for a passphrase. You can <strong>press Enter twice</strong> to skip it (no passphrase).</p>
@@ -962,24 +962,24 @@ footer {
 <span class="prompt">$</span> <span class="cmd">cd ~/Documents</span>
 
 <span class="cmt"># Download the code</span>
-<span class="prompt">$</span> <span class="cmd">git clone https://github.com/coreweave/TopoWeave.git</span>
-<span class="out">Cloning into 'TopoWeave'...</span>
+<span class="prompt">$</span> <span class="cmd">git clone https://github.com/your-org/node-helper.git</span>
+<span class="out">Cloning into 'node-helper'...</span>
 <span class="out">Receiving objects: 100% ... done.</span>
 
 <span class="cmt"># Go into the folder</span>
-<span class="prompt">$</span> <span class="cmd">cd TopoWeave</span>
+<span class="prompt">$</span> <span class="cmd">cd node-helper</span>
 
 <span class="cmt"># Switch to the right branch (this is important!)</span>
-<span class="prompt">$</span> <span class="cmd">git checkout rpatino/cw-node-helper</span>
-<span class="ok">Switched to branch 'rpatino/cw-node-helper'</span></pre>
+<span class="prompt">$</span> <span class="cmd">git checkout main</span>
+<span class="ok">Switched to branch 'main'</span></pre>
   </div>
 
   <div class="callout callout-info">
     <div class="callout-header"><span class="callout-icon">&#9432;</span> What just happened?</div>
     <ul style="margin: 0; padding-left: 1.2rem; color: var(--text);">
       <li><code>cd ~/Documents</code> &mdash; moved into your Documents folder</li>
-      <li><code>git clone ...</code> &mdash; downloaded all the code into a folder called <code>TopoWeave</code></li>
-      <li><code>cd TopoWeave</code> &mdash; went inside that folder</li>
+      <li><code>git clone ...</code> &mdash; downloaded all the code into a folder called <code>node-helper</code></li>
+      <li><code>cd node-helper</code> &mdash; went inside that folder</li>
       <li><code>git checkout ...</code> &mdash; switched to the branch that has the tool</li>
     </ul>
   </div>
@@ -988,7 +988,7 @@ footer {
     <div class="callout-header"><span class="callout-icon">&#10007;</span> If you see "Permission denied", "404", or "Authentication failed"</div>
     <p style="margin-bottom: 0.5rem;">This means one of two things:</p>
     <ul style="margin: 0; padding-left: 1.2rem; color: var(--text);">
-      <li><strong>You're not in the CoreWeave GitHub org</strong> &mdash; go back to <a href="#checklist">Step 1</a> and get repo access first. No amount of retrying will fix this.</li>
+      <li><strong>You're not in the GitHub org</strong> &mdash; go back to <a href="#checklist">Step 1</a> and get repo access first. No amount of retrying will fix this.</li>
       <li><strong>You have org access but GitHub doesn't know who you are on this computer</strong> &mdash; go back to <a href="#github-access">Step 6</a> and set up GitHub authentication (gh CLI or SSH key).</li>
     </ul>
   </div>
@@ -1009,7 +1009,7 @@ footer {
       <span class="terminal-dot"></span>
       <span class="terminal-dot"></span>
       <span class="terminal-dot"></span>
-      <span class="terminal-title">Terminal &mdash; make sure you're in the TopoWeave folder</span>
+      <span class="terminal-title">Terminal &mdash; make sure you're in the node-helper folder</span>
     </div>
     <pre><span class="prompt">$</span> <span class="cmd">cp .env.example .env</span></pre>
   </div>
@@ -1017,7 +1017,7 @@ footer {
   <h3>8b. Get your Jira API token</h3>
   <ol class="steps">
     <li>Open your browser and go to:<br><a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank">id.atlassian.com/manage-profile/security/api-tokens</a></li>
-    <li>Log in with your CoreWeave / Atlassian account if asked.</li>
+    <li>Log in with your your organization's Atlassian account if asked.</li>
     <li>Click the blue <strong>"Create API token"</strong> button.</li>
     <li>Give it a name. Type <code>cw-node-helper</code> and click <strong>Create</strong>.</li>
     <li>A popup shows your token. Click the <strong>copy icon</strong> next to it. <strong>Save this somewhere safe</strong> &mdash; you won't see it again!</li>
@@ -1049,11 +1049,11 @@ footer {
       <span class="terminal-title">.env &mdash; replace the placeholder values</span>
     </div>
     <pre><span class="cmt"># Required</span>
-JIRA_EMAIL=<span class="err">your.name@coreweave.com</span>        <span class="cmt">&larr; change this to YOUR email</span>
+JIRA_EMAIL=<span class="err">your.name@example.com</span>        <span class="cmt">&larr; change this to YOUR email</span>
 JIRA_API_TOKEN=<span class="err">paste_your_jira_token_here</span>  <span class="cmt">&larr; paste your token here</span>
 
 <span class="cmt"># Optional (leave as-is if you don't have NetBox)</span>
-NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_URL=https://netbox.example.com/api
 NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
   </div>
 
@@ -1065,10 +1065,10 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
       <span class="terminal-dot"></span>
       <span class="terminal-title">.env &mdash; example with fake values</span>
     </div>
-    <pre>JIRA_EMAIL=<span class="ok">john.doe@coreweave.com</span>
+    <pre>JIRA_EMAIL=<span class="ok">john.doe@example.com</span>
 JIRA_API_TOKEN=<span class="ok">ATATT3xFfGF0abc123def456ghi789jklmno...</span>
 
-NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_URL=https://netbox.example.com/api
 NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
   </div>
 
@@ -1094,9 +1094,9 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
       <span class="terminal-dot"></span>
       <span class="terminal-dot"></span>
       <span class="terminal-dot"></span>
-      <span class="terminal-title">Terminal &mdash; make sure you're in the TopoWeave folder</span>
+      <span class="terminal-title">Terminal &mdash; make sure you're in the node-helper folder</span>
     </div>
-    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/node-helper</span>
 <span class="prompt">$</span> <span class="cmd">bash start.sh</span></pre>
   </div>
 
@@ -1157,7 +1157,7 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
       <span class="terminal-dot"></span>
       <span class="terminal-title">Terminal &mdash; this is all you need to remember</span>
     </div>
-    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/node-helper</span>
 <span class="prompt">$</span> <span class="cmd">bash start.sh</span></pre>
   </div>
 </section>
@@ -1178,7 +1178,7 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
       <span class="terminal-dot"></span>
       <span class="terminal-title">Terminal</span>
     </div>
-    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/TopoWeave</span>
+    <pre><span class="prompt">$</span> <span class="cmd">cd ~/Documents/node-helper</span>
 <span class="prompt">$</span> <span class="cmd">bash start.sh</span></pre>
   </div>
 
@@ -1219,7 +1219,7 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
 
   <div class="callout callout-warn">
     <div class="callout-header"><span class="callout-icon">&#9888;</span> Both scripts are branch-locked</div>
-    Both <code>start.sh</code> and <code>git_menu.sh</code> are locked to the <code>rpatino/cw-node-helper</code> branch. You cannot accidentally switch branches, push to the wrong place, or break anything. If you try, the script blocks it.
+    Both <code>start.sh</code> and <code>git_menu.sh</code> are locked to the <code>main</code> branch. You cannot accidentally switch branches, push to the wrong place, or break anything. If you try, the script blocks it.
   </div>
 </section>
 
@@ -1234,7 +1234,7 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
 
   <div class="callout callout-danger">
     <div class="callout-header"><span class="callout-icon">&#10007;</span> "Permission denied" or "404 Not Found" when cloning</div>
-    You don't have access to the GitHub repo. Ask your manager or Ricky to add your GitHub username to <code>coreweave/TopoWeave</code>. Then try the clone command again.
+    You don't have access to the GitHub repo. Ask your manager or Ricky to add your GitHub username to <code>your-org/node-helper</code>. Then try the clone command again.
   </div>
 
   <div class="callout callout-danger">
@@ -1265,12 +1265,12 @@ NETBOX_API_TOKEN=paste_your_netbox_token_here</pre>
 
   <div class="callout callout-danger">
     <div class="callout-header"><span class="callout-icon">&#10007;</span> "fatal: not a git repository"</div>
-    You're in the wrong folder. Run: <code>cd ~/Documents/TopoWeave</code>
+    You're in the wrong folder. Run: <code>cd ~/Documents/node-helper</code>
   </div>
 
   <div class="callout callout-danger">
-    <div class="callout-header"><span class="callout-icon">&#10007;</span> "error: pathspec 'rpatino/cw-node-helper' did not match"</div>
-    The branch hasn't been fetched yet. Run: <code>git fetch origin</code> and then try <code>git checkout rpatino/cw-node-helper</code> again.
+    <div class="callout-header"><span class="callout-icon">&#10007;</span> "error: pathspec 'main' did not match"</div>
+    The branch hasn't been fetched yet. Run: <code>git fetch origin</code> and then try <code>git checkout main</code> again.
   </div>
 
   <div class="callout callout-warn">

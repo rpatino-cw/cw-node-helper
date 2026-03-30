@@ -5,7 +5,7 @@
 # Designed for non-technical users. Just type: bash start.sh
 # ================================================================
 
-BRANCH="rpatino/cw-node-helper"
+BRANCH="main"
 REMOTE="origin"
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -78,7 +78,7 @@ _check_env_has_real_values() {
     if grep -q "paste_your_jira_token_here" "$REPO_DIR/.env" 2>/dev/null; then
         return 1
     fi
-    if grep -q "your.name@coreweave.com" "$REPO_DIR/.env" 2>/dev/null; then
+    if grep -q "your.name@example.com" "$REPO_DIR/.env" 2>/dev/null; then
         return 1
     fi
     return 0
@@ -169,7 +169,7 @@ _validate_jira() {
     http_code=$(curl -s -o /dev/null -w "%{http_code}" \
         -u "${email}:${token}" \
         -H "Accept: application/json" \
-        "https://coreweave.atlassian.net/rest/api/3/myself" \
+        "https://your-org.atlassian.net/rest/api/3/myself" \
         --connect-timeout 5 --max-time 10 2>/dev/null)
     if [ "$http_code" = "200" ]; then
         return 0
@@ -249,7 +249,7 @@ do_run() {
     jira_email=$(_env_get "JIRA_EMAIL")
     jira_token=$(_env_get "JIRA_API_TOKEN")
 
-    if [ -z "$jira_email" ] || [ "$jira_email" = "your.name@coreweave.com" ] || \
+    if [ -z "$jira_email" ] || [ "$jira_email" = "your.name@example.com" ] || \
        [ -z "$jira_token" ] || [ "$jira_token" = "paste_your_jira_token_here" ]; then
         echo -e "  ${RED}${BOLD}Jira credentials not configured.${RESET}"
         echo -e "  ${DIM}The app cannot work without Jira. Run option 4 (First-time setup).${RESET}"
@@ -418,9 +418,9 @@ do_setup() {
         cp "$REPO_DIR/.env.example" "$REPO_DIR/.env"
     else
         cat > "$REPO_DIR/.env" << 'ENVEOF'
-JIRA_EMAIL=your.name@coreweave.com
+JIRA_EMAIL=your.name@example.com
 JIRA_API_TOKEN=paste_your_jira_token_here
-NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_URL=https://netbox.example.com/api
 NETBOX_API_TOKEN=paste_your_netbox_token_here
 OPENAI_API_KEY=paste_your_openai_api_key_here
 ENVEOF
@@ -434,9 +434,9 @@ ENVEOF
     #  STEP 1: Jira Email (REQUIRED)
     # ==============================================================
     echo -e "  ${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "  ${BOLD}Step 1 of 4: Your CoreWeave email${RESET} ${RED}(required)${RESET}"
+    echo -e "  ${BOLD}Step 1 of 4: Your work email${RESET} ${RED}(required)${RESET}"
     echo -e "  ${BOLD}${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "  ${DIM}(example: john.doe@coreweave.com)${RESET}"
+    echo -e "  ${DIM}(example: john.doe@example.com)${RESET}"
     echo ""
     echo -ne "  Email: "
     read -r user_email
@@ -483,7 +483,7 @@ ENVEOF
         echo -e "  ${RED}${BOLD}Jira credentials are INVALID.${RESET}"
         echo -e "  ${YELLOW}The email or token you entered didn't work.${RESET}"
         echo -e "  ${DIM}Common fixes:${RESET}"
-        echo -e "  ${DIM}  • Make sure you used your @coreweave.com email${RESET}"
+        echo -e "  ${DIM}  • Make sure you used your @example.com email${RESET}"
         echo -e "  ${DIM}  • Generate a fresh token at the link above${RESET}"
         echo -e "  ${DIM}  • Copy the full token — no extra spaces${RESET}"
         echo ""
@@ -534,7 +534,7 @@ ENVEOF
         local netbox_url
         netbox_url=$(_env_get "NETBOX_API_URL")
         if [ -z "$netbox_url" ]; then
-            netbox_url="https://coreweave.cloud.netboxapp.com/api"
+            netbox_url="https://netbox.example.com/api"
             _env_set "NETBOX_API_URL" "$netbox_url"
         fi
         _validate_netbox "$netbox_url" "$user_netbox_token"
@@ -785,7 +785,7 @@ do_health_check() {
     else
         echo -e "${RED}✗ NOT A GIT REPO${RESET}"
         echo -e "    ${DIM}Something is wrong with the installation.${RESET}"
-        echo -e "    ${DIM}Re-clone: git clone https://github.com/coreweave/TopoWeave.git${RESET}"
+        echo -e "    ${DIM}Re-clone: git clone https://github.com/your-org/node-helper.git${RESET}"
         issues=$((issues + 1))
     fi
 

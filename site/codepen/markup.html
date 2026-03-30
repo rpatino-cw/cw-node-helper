@@ -32,7 +32,7 @@
   <div class="wrap">
     <div class="hero-grid">
       <div class="hero-text">
-        <div class="hero-label">CoreWeave DCT</div>
+        <div class="hero-label">DCT Operations</div>
         <h1>Your terminal.<br>Your tickets.<br><span class="hl">Zero context switching.</span></h1>
         <p class="hero-sub">A single-file Python CLI that puts Jira tickets, NetBox data, rack maps, SLA tracking, and live queue monitoring in one place &mdash; your terminal.</p>
         <a href="#setup" class="hero-cta">Get Started</a>
@@ -48,11 +48,11 @@
         </div>
         <div class="terminal-body">
 <span class="t-cyan t-bold">  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
-<span class="t-cyan t-bold">  ┃</span>  <span class="t-white t-bold">CoreWeave  DCT  Node  Helper</span>         <span class="t-cyan t-bold">┃</span>
+<span class="t-cyan t-bold">  ┃</span>  <span class="t-white t-bold">CW  Node  Helper</span>         <span class="t-cyan t-bold">┃</span>
 <span class="t-cyan t-bold">  ┃</span>  <span class="t-green t-bold">Ricardo Patino</span>  <span class="t-dim">logged in</span>             <span class="t-cyan t-bold">┃</span>
 <span class="t-cyan t-bold">  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
 
-  <span class="t-green t-bold">[WATCHING]</span> <span class="t-dim">DO @ US-CENTRAL-07A — every 45s</span>
+  <span class="t-green t-bold">[WATCHING]</span> <span class="t-dim">DO @ US-SITE-01A — every 45s</span>
 
   <span class="t-bold">1</span>  Lookup ticket     <span class="t-dim">(DO-12345, HO-67890)</span>
   <span class="t-bold">2</span>  Node info         <span class="t-dim">(service tag or hostname)</span>
@@ -138,10 +138,10 @@
 
   <span class="t-bold">Project</span>  DO  <span class="t-dim">│</span>  <span class="t-bold">Type</span>  Task  <span class="t-dim">│</span>  <span class="t-bold">Assignee</span>  <span class="t-mag t-bold">Ricardo Patino</span>
   <span class="t-dim">──────────────────────────────────────────────────────────</span>
-          Site   <span class="t-cyan">US-CENTRAL-07A</span>
-          Rack   <span class="t-cyan">US-EVI01.DH1.R64.RU34</span>
+          Site   <span class="t-cyan">US-SITE-01A</span>
+          Rack   <span class="t-cyan">US-SITE01.DH1.R64.RU34</span>
    Service Tag   <span class="t-cyan">10NQ724</span>
-      Hostname   <span class="t-cyan">dh1-r064-ru34-node-01-us-central-07a</span>
+      Hostname   <span class="t-cyan">dh1-r064-ru34-node-01-us-site-01a</span>
         Vendor   <span class="t-cyan">Dell</span>
             IP   <span class="t-cyan">10.96.0.42</span>
   <span class="t-dim">──────────────────────────────────────────────────────────</span>
@@ -215,10 +215,10 @@
             <div class="terminal-dot r"></div>
             <div class="terminal-dot y"></div>
             <div class="terminal-dot g"></div>
-            <div class="terminal-title">queue &mdash; US-CENTRAL-07A</div>
+            <div class="terminal-title">queue &mdash; US-SITE-01A</div>
           </div>
           <div class="terminal-body">
-  <span class="t-white t-bold">DO queue for US-CENTRAL-07A</span>  <span class="t-dim">(top 20)</span>  <span class="t-dim">filter:</span> <span class="t-yellow t-bold">open</span>
+  <span class="t-white t-bold">DO queue for US-SITE-01A</span>  <span class="t-dim">(top 20)</span>  <span class="t-dim">filter:</span> <span class="t-yellow t-bold">open</span>
 
    <span class="t-bold">1.</span>  DO-18739  <span class="t-yellow">●</span> <span class="t-yellow">In Progress</span>      <span class="t-green">3h 22m</span>  <span class="t-cyan">10NQ724</span>          <span class="t-dim">Ricardo</span>
    <span class="t-bold">2.</span>  DO-18740  <span class="t-dim">○</span> <span class="t-dim">To Do</span>            <span class="t-green">1h 05m</span>  <span class="t-cyan">ABCD1234</span>
@@ -254,7 +254,7 @@
           <div class="terminal-dot g"></div>
           <div class="terminal-title">data hall map</div>
         </div>
-        <div class="terminal-body"><span class="t-white t-bold">US-EVI01 DH1</span> <span class="t-dim">— Rack R64</span>
+        <div class="terminal-body"><span class="t-white t-bold">US-SITE01 DH1</span> <span class="t-dim">— Rack R64</span>
 <span class="t-dim">Left (R1-R140)      Right (R141-R320)</span>
 
 <span class="map-rack">----------</span>      <span class="map-rack">----------</span>
@@ -284,7 +284,7 @@
           <div class="terminal-title">rack elevation</div>
         </div>
         <div class="terminal-body">
-  <span class="t-white t-bold">064</span>  <span class="t-dim">US-CENTRAL-07A</span>  <span class="t-dim">42U</span>
+  <span class="t-white t-bold">064</span>  <span class="t-dim">US-SITE-01A</span>  <span class="t-dim">42U</span>
   <span class="t-dim">┌──────────────────────────────────────────┐</span>
   <span class="t-dim">│ U42  ...  (empty U42-U36)</span>
   <span class="t-dim">│</span> <span class="t-dim">U35</span>    PDU A           <span class="t-dim">Infrastructure</span>  <span class="t-green">Active</span>
@@ -301,7 +301,7 @@
   <span class="t-dim">│ U17  ...  (empty U17-U01)</span>
   <span class="t-dim">└──────────────────────────────────────────┘</span>
   <span class="t-dim">8 devices  │  28/42U occupied</span>
-  <span class="t-cyan t-bold">&gt;&gt;</span> = <span class="t-cyan">dh1-r064-node-01-us-central-07a</span> <span class="t-dim">at U27-U28</span></div>
+  <span class="t-cyan t-bold">&gt;&gt;</span> = <span class="t-cyan">dh1-r064-node-01-us-site-01a</span> <span class="t-dim">at U27-U28</span></div>
       </div>
     </div>
   </div>
@@ -367,7 +367,7 @@
             <div class="terminal-title">watcher &mdash; live</div>
           </div>
           <div class="terminal-body">
-  <span class="t-white t-bold">Watching DO queue for US-CENTRAL-07A</span>
+  <span class="t-white t-bold">Watching DO queue for US-SITE-01A</span>
   <span class="t-dim">Checking every 45s — Ctrl+C to stop</span>
   <span class="t-dim">──────────────────────────────────────────────────────</span>
 
@@ -377,7 +377,7 @@
   <span class="t-green t-bold">NEW</span>  <span class="t-dim">[14:42]</span>  DO-18751  <span class="t-dim">○</span> <span class="t-dim">To Do</span>  <span class="t-cyan">QW3RT1Y</span>  <span class="t-dim">GPU RMA — fan failure</span>
 
   <span class="t-green t-bold">┌─ NEW TICKET ──────────────────────────────────────┐</span>
-  <span class="t-green t-bold">│</span>  <span class="t-white t-bold">DO-18751</span>  <span class="t-dim">○</span> <span class="t-dim">To Do</span>   <span class="t-cyan">QW3RT1Y</span>  <span class="t-dim">US-EVI01.DH1.R88.RU20</span>
+  <span class="t-green t-bold">│</span>  <span class="t-white t-bold">DO-18751</span>  <span class="t-dim">○</span> <span class="t-dim">To Do</span>   <span class="t-cyan">QW3RT1Y</span>  <span class="t-dim">US-SITE01.DH1.R88.RU20</span>
   <span class="t-green t-bold">│</span>  <span class="t-dim">GPU RMA — fan failure detected</span>
   <span class="t-green t-bold">│</span>  <span class="t-dim">Unassigned</span>
   <span class="t-green t-bold">│</span>
@@ -546,7 +546,7 @@
       <div class="feature-text">
         <div class="feature-num">10 &mdash; IB Fabric</div>
         <h2>Know every IB port.</h2>
-        <p>InfiniBand connections from the cutsheet &mdash; ibp0 through ibp7, each mapped to its leaf switch and port. Works for EVI01 DH1/DH2 and CDZ01. No NetBox dependency. Merged with BMC/DPU connections from NetBox in one view.</p>
+        <p>InfiniBand connections from the cutsheet &mdash; ibp0 through ibp7, each mapped to its leaf switch and port. Works for SITE01 DH1/DH2 and CDZ01. No NetBox dependency. Merged with BMC/DPU connections from NetBox in one view.</p>
         <div class="feature-tag">Cutsheet + NetBox merged</div>
       </div>
       <div class="feature-visual">
@@ -629,11 +629,11 @@
             <div class="terminal-dot r"></div>
             <div class="terminal-dot y"></div>
             <div class="terminal-dot g"></div>
-            <div class="terminal-title">weekend-assign &mdash; US-CENTRAL-07A</div>
+            <div class="terminal-title">weekend-assign &mdash; US-SITE-01A</div>
           </div>
           <div class="terminal-body">
   <span class="t-dim">$ python3 get_node_context.py weekend-assign \</span>
-  <span class="t-dim">    --site US-CENTRAL-07A --group dct-ops</span>
+  <span class="t-dim">    --site US-SITE-01A --group dct-ops</span>
 
   <span class="t-dim">Fetching group roster...</span> <span class="t-green t-bold">6 members</span>
   <span class="t-dim">Fetching open queue...</span>   <span class="t-yellow t-bold">3 unassigned</span>
@@ -739,7 +739,7 @@
             <h4>NetBox API Token <span class="hl-cyan">(optional but recommended)</span></h4>
             <p>NetBox enables rack elevations, cable tracing, device lookups, and neighbor navigation. Without it the tool still works &mdash; you just won't see hardware-level data.</p>
             <ol>
-              <li>Open <strong>coreweave.cloud.netboxapp.com/user/api-tokens/</strong></li>
+              <li>Open <strong>netbox.example.com/user/api-tokens/</strong></li>
               <li>Click <strong class="hl-accent">"Add a token"</strong></li>
               <li>Copy the token</li>
             </ol>
@@ -773,11 +773,11 @@ cp .env.example .env
 nano .env   <span class="hl-cyan"># or:  code .env  /  open -e .env</span></div>
 
             <p>Fill in your <span class="hl-cyan">.env</span> file:</p>
-<div class="guide-code">JIRA_EMAIL=<span class="hl-green">your.name@coreweave.com</span>
+<div class="guide-code">JIRA_EMAIL=<span class="hl-green">your.name@example.com</span>
 JIRA_API_TOKEN=<span class="hl-green">ATATT3xFfGF0abc123def...</span>
 
 <span class="hl-accent"># Optional</span>
-NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+NETBOX_API_URL=https://netbox.example.com/api
 NETBOX_API_TOKEN=<span class="hl-green">your-netbox-token-here</span></div>
 
             <h4>Launch</h4>
@@ -831,7 +831,7 @@ python3 get_node_context.py <span class="hl-green">d0001142</span></div>
 
             <h4>Queue Browsing</h4>
 <div class="guide-code"><span class="hl-accent"># Open tickets at your site</span>
-python3 get_node_context.py queue --site US-CENTRAL-07A --status open
+python3 get_node_context.py queue --site US-SITE-01A --status open
 
 <span class="hl-accent"># HO tickets for a site</span>
 python3 get_node_context.py queue --project HO --site US-EAST-03
@@ -848,7 +848,7 @@ python3 get_node_context.py history <span class="hl-green">d0001142</span></div>
 
             <h4>Background Watcher</h4>
 <div class="guide-code"><span class="hl-accent"># Watch for new tickets (macOS notifications + sound)</span>
-python3 get_node_context.py watch --site US-CENTRAL-07A --interval 45</div>
+python3 get_node_context.py watch --site US-SITE-01A --interval 45</div>
           </div>
         </div>
       </div>
@@ -1001,7 +1001,7 @@ cwhelper DO-12345</div>
 <!-- ============================================================== -->
 <footer>
   <div class="wrap">
-    <div class="footer-left">Built by <strong>Ricardo Patino</strong> for CoreWeave DCT<br><span style="color:var(--ansi-yellow);font-size:0.65rem;">Active development &mdash; report bugs to Romeo Patino</span></div>
+    <div class="footer-left">Built by <strong>Ricardo Patino</strong> for DCT Operations<br><span style="color:var(--ansi-yellow);font-size:0.65rem;">Active development &mdash; report bugs to Romeo Patino</span></div>
     <div class="footer-right">Python 3.10+ &middot; Single file &middot; 7,000+ lines &middot; v7</div>
   </div>
 </footer>

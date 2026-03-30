@@ -17,7 +17,7 @@ Major feature additions, UX improvements, and bug fixes across the tool. All cha
 ### 2. DH Map — Configurable Data Hall Layouts
 - New `dh_layouts.json` config file for custom DH layouts
 - Interactive setup wizard: `_setup_dh_layout()` asks racks/row, columns, rows per column, serpentine y/n, entrance
-- Built-in fallback for DH1 at US-EVI01/US-CENTRAL-07A (no config needed)
+- Built-in fallback for DH1 at US-SITE01/US-SITE-01A (no config needed)
 - Unknown data halls prompt "Would you like to set one up?"
 
 ### 3. Rack Elevation View (`[e]` hotkey)
@@ -37,7 +37,7 @@ Major feature additions, UX improvements, and bug fixes across the tool. All cha
 ### 5. MRB Queue (Menu Option 9)
 - New menu option to browse MRB (RMA/parts) tickets by site
 - Reuses existing `_search_queue(project="MRB")` — no new JQL logic
-- CLI already works: `queue --project MRB --site US-CENTRAL-07A`
+- CLI already works: `queue --project MRB --site US-SITE-01A`
 
 ### 6. MRB Lookup from Tickets (`[f]` hotkey)
 - Press `[f]` on a DO/HO ticket to find related MRB parts tickets
@@ -97,8 +97,8 @@ Major feature additions, UX improvements, and bug fixes across the tool. All cha
 
 ### Device Name Shortening
 - `_short_device_name()` strips DH prefix, rack number, site suffix, parenthetical serials
-- Node devices: `dh1-r064-node-01-us-central-07a` → `Node 1`
-- Other devices: `dh1-bmc-a2-01-r012-us-central-07a` → `BMC A2 01`
+- Node devices: `dh1-r064-node-01-us-site-01a` → `Node 1`
+- Other devices: `dh1-bmc-a2-01-r012-us-site-01a` → `BMC A2 01`
 - Known acronyms uppercased: BMC, TOR, PDU, DPU, NIC, GPU, etc.
 
 ### Logged-In User Banner
@@ -133,7 +133,7 @@ Major feature additions, UX improvements, and bug fixes across the tool. All cha
 - NetBox returns `position` as float (e.g. `34.0`) — cast to `int` for `range()`
 
 ### Empty Queue Messages
-- Queue: `"In Progress — no DO tickets for US-CENTRAL-07A"` with suggestion
+- Queue: `"In Progress — no DO tickets for US-SITE-01A"` with suggestion
 - Node history: `"No tickets found for 'S948338X5A04781'"` with context
 - Single lookup: `"No results for 'DO-99999'"`
 

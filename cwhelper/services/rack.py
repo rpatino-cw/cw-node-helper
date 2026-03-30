@@ -11,8 +11,8 @@ import webbrowser
 
 from cwhelper import config as _cfg
 from cwhelper.config import *  # noqa: F401,F403
-__all__ = ['_print_rack_neighbors', '_draw_neighbor_panel', '_print_netbox_info_inline', '_handle_rack_neighbors', '_handle_rack_view', '_draw_mini_dh_map', '_fetch_device_type_heights', '_draw_rack_elevation']
-from cwhelper.clients.netbox import _netbox_available, _netbox_find_rack_by_name, _netbox_get_rack_devices, _netbox_find_device, _netbox_get_interfaces, _fetch_neighbor_devices, _parse_iface_speed, _build_netbox_context
+__all__ = ['_print_rack_neighbors', '_draw_neighbor_panel', '_print_netbox_info_inline', '_handle_rack_neighbors', '_handle_rack_view', '_draw_mini_dh_map', '_draw_connection_map', '_draw_connection_map_image', '_fetch_device_type_heights', '_draw_rack_elevation']
+from cwhelper.clients.netbox import _netbox_available, _netbox_find_rack_by_name, _netbox_get_rack_devices, _netbox_find_device, _netbox_get, _netbox_get_interfaces, _fetch_neighbor_devices, _parse_iface_speed, _build_netbox_context
 from cwhelper.clients.jira import _jira_get, _get_credentials, _is_mine
 from cwhelper.state import _load_user_state, _get_dh_layout, _setup_dh_layout, _load_dh_layouts, _save_dh_layouts, _record_rack_view
 from cwhelper.services.context import _parse_rack_location, _get_physical_neighbors, _short_device_name, _build_context
@@ -442,8 +442,9 @@ def _handle_rack_view(ctx: dict, email: str, token: str) -> str | None:
             site_code = parsed["site_code"]
             dh = parsed["dh"]
             layout = _get_dh_layout(site_code, dh)
-            if layout is None and dh.upper() == "DH1" and any(
-                s in site_code.upper() for s in ("EVI01", "CENTRAL-07")
+            _supported = [s.strip().upper() for s in os.environ.get("SUPPORTED_SITES", "").split(",") if s.strip()]
+            if layout is None and dh.upper() == "DH1" and _supported and any(
+                s in site_code.upper() for s in _supported
             ):
                 layout = {
                     "racks_per_row": 10,
@@ -623,8 +624,8 @@ def _draw_mini_dh_map(rack_loc: str):
     """Draw a miniature data hall map with per-dash rack display and walking route.
 
     Uses saved DH layout config when available, falls back to built-in DH1
-    layout for US-EVI01/US-CENTRAL-07A.  For unknown data halls, offers to
-    run the setup wizard.
+    layout for sites listed in SUPPORTED_SITES env var.  For unknown data
+    halls, offers to run the setup wizard.
 
     Each dash = 1 cab.  Target rack highlighted in cyan.
     Yellow walking route from entrance (bottom) to target rack.
@@ -637,16 +638,17 @@ def _draw_mini_dh_map(rack_loc: str):
     target = parsed["rack"]
     site_code = parsed["site_code"]
     dh = parsed["dh"]
-    _is_evi01_dh1 = dh.upper() == "DH1" and any(
-        s in site_code.upper() for s in ("EVI01", "CENTRAL-07")
+    _supported = [s.strip().upper() for s in os.environ.get("SUPPORTED_SITES", "").split(",") if s.strip()]
+    _is_supported_dh1 = dh.upper() == "DH1" and _supported and any(
+        s in site_code.upper() for s in _supported
     )
 
     # --- Resolve layout: saved config > built-in DH1 > offer setup ---
     layout = _get_dh_layout(site_code, dh)
 
     if layout is None:
-        # Built-in fallback for DH1 at known EVI/CENTRAL sites
-        if _is_evi01_dh1:
+        # Built-in fallback for DH1 at supported sites (set via SUPPORTED_SITES env var)
+        if _is_supported_dh1:
             layout = {
                 "racks_per_row": 10,
                 "columns": [
@@ -679,16 +681,22 @@ def _draw_mini_dh_map(rack_loc: str):
 
     # Use default per_row for visual rendering width
     per_row = default_per_row
+    # Visible width of one column segment: "NNN " + "X " * pr + " NNN"
+    vis_width = 4 + (per_row * 2 - 1) + 4  # 27 for 10 racks
 
     def build_row(col_start, row, col_per_row=None):
         pr = col_per_row or default_per_row
+        first_rack = rack_at(col_start, row, 0, pr)
+        last_rack = rack_at(col_start, row, pr - 1, pr)
         chars = []
         for pos in range(pr):
-            if rack_at(col_start, row, pos) == target:
+            if rack_at(col_start, row, pos, pr) == target:
                 chars.append(f"{CYAN}{BOLD}#{RESET}")
             else:
-                chars.append("-")
-        return "".join(chars)
+                chars.append(f"{DIM}-{RESET}")
+        label_l = f"{DIM}{first_rack:>3}{RESET} "
+        label_r = f" {DIM}{last_rack:<3}{RESET}"
+        return label_l + " ".join(chars) + label_r
 
     # --- Find which column and row the target is in ---
     target_col_idx = -1
@@ -706,9 +714,9 @@ def _draw_mini_dh_map(rack_loc: str):
     max_rows = max(c["num_rows"] for c in cols)
     COL_GAP = "       "  # 7 spaces between column pairs (consistent for any # of columns)
 
-    # Walking route only enabled for EVI01 DH1 (well-tested 2-column serpentine).
+    # Walking route only enabled for supported-site DH1 (well-tested 2-column serpentine).
     # Other sites show the map with # marker and row-end labels only.
-    has_route = _is_evi01_dh1 and target_row >= 0 and len(cols) >= 2
+    has_route = _is_supported_dh1 and target_row >= 0 and len(cols) >= 2
 
     # --- Compute route gap position for animated rendering ---
     if has_route:
@@ -724,7 +732,8 @@ def _draw_mini_dh_map(rack_loc: str):
     hdr_parts = []
     for c in cols:
         end = c["start"] + c["num_rows"] * per_row - 1
-        hdr_parts.append(f"{c['label']} (R{c['start']}-R{end})")
+        part = f"{c['label']} (R{c['start']}-R{end})"
+        hdr_parts.append(f"{part:<{vis_width}}")
     header2 = f"  {DIM}{COL_GAP.join(hdr_parts)}{RESET}"
 
     body = []  # list of dicts: {plain, on_path, is_turn}
@@ -734,41 +743,15 @@ def _draw_mini_dh_map(rack_loc: str):
             if row < col["num_rows"]:
                 col_strs.append(build_row(col["start"], row, col.get("racks_per_row")))
             else:
-                col_strs.append(" " * per_row)
+                col_strs.append(" " * vis_width)
 
         on_path = target_row >= 0 and row >= target_row
         is_turn = target_row >= 0 and row == target_row
 
-        # Plain line with optional row reference numbers
-        if not has_route:
-            # Left label: first rack of first visible column
-            first_col = None
-            for ci in range(len(cols)):
-                if row < cols[ci]["num_rows"]:
-                    first_col = cols[ci]
-                    break
-            if first_col:
-                fc_pr = first_col.get("racks_per_row")
-                start_rack = rack_at(first_col["start"], row, 0, fc_pr)
-                plain = f"  {DIM}R{start_rack:<4}{RESET} {col_strs[0]}"
-            else:
-                plain = f"        {col_strs[0]}"
-        else:
-            plain = f"  {col_strs[0]}"
+        # Labels are now embedded in build_row — just join columns
+        plain = f"  {col_strs[0]}"
         for ci in range(1, len(cols)):
             plain += COL_GAP + col_strs[ci]
-
-        # Right label: last rack of last visible column (non-route only)
-        if not has_route:
-            last_col = None
-            for ci in range(len(cols) - 1, -1, -1):
-                if row < cols[ci]["num_rows"]:
-                    last_col = cols[ci]
-                    break
-            if last_col:
-                lc_pr = last_col.get("racks_per_row", default_per_row)
-                end_rack = rack_at(last_col["start"], row, lc_pr - 1, lc_pr)
-                plain += f"  {DIM}R{end_rack}{RESET}"
 
         body.append({"plain": plain, "on_path": on_path, "is_turn": is_turn})
 
@@ -781,8 +764,8 @@ def _draw_mini_dh_map(rack_loc: str):
     if has_route:
         # The corridor is in the gap after column route_gap_idx
         # Entrance spans from that gap to the right edge of the last column
-        gap_char_start = (route_gap_idx + 1) * per_row + route_gap_idx * len(COL_GAP)
-        total_width = len(cols) * per_row + (len(cols) - 1) * len(COL_GAP)
+        gap_char_start = (route_gap_idx + 1) * vis_width + route_gap_idx * len(COL_GAP)
+        total_width = len(cols) * vis_width + (len(cols) - 1) * len(COL_GAP)
         entrance_width = total_width - gap_char_start
         entrance_line = f"  {' ' * gap_char_start}{YELLOW}{BOLD}{'=' * entrance_width}{RESET}"
 
@@ -823,8 +806,8 @@ def _draw_mini_dh_map(rack_loc: str):
 
     # ANSI column positions (1-indexed) — computed dynamically for any # of columns
     # The route corridor runs through the gap at route_gap_idx.
-    # Gap i starts at: indent(2) + (i+1)*per_row + i*len(COL_GAP) + 1
-    gap_start = 2 + (route_gap_idx + 1) * per_row + route_gap_idx * len(COL_GAP) + 1
+    # Gap i starts at: indent(2) + (i+1)*vis_width + i*len(COL_GAP) + 1
+    gap_start = 2 + (route_gap_idx + 1) * vis_width + route_gap_idx * len(COL_GAP) + 1
     gap_w = len(COL_GAP)
     corridor_col = gap_start + gap_w // 2  # middle of the gap
 
@@ -880,6 +863,501 @@ def _draw_mini_dh_map(rack_loc: str):
     for fl in footer:
         print(fl)
 
+
+
+def _draw_connection_map(rack_loc: str, peer_racks: set | list = (),
+                        source_label: str = "", peer_label: str = ""):
+    """Draw a DH map highlighting source rack AND peer rack(s).
+
+    Like ``_draw_mini_dh_map`` but designed for connection tracing:
+    source rack shown in cyan, peer racks in green with pulsing dots.
+    No walking route — just the two-color highlight so the DCT can see
+    exactly where both ends of a connection are on the floor.
+
+    *peer_racks* is a set/list of rack numbers (ints) to highlight.
+    """
+    parsed = _parse_rack_location(rack_loc)
+    if not parsed:
+        return
+
+    target = parsed["rack"]
+    site_code = parsed["site_code"]
+    dh = parsed["dh"]
+    _supported = [s.strip().upper() for s in os.environ.get("SUPPORTED_SITES", "").split(",") if s.strip()]
+    _is_supported_dh1 = dh.upper() == "DH1" and _supported and any(
+        s in site_code.upper() for s in _supported
+    )
+
+    layout = _get_dh_layout(site_code, dh)
+    if layout is None and _is_supported_dh1:
+        layout = {
+            "racks_per_row": 10,
+            "columns": [
+                {"label": "Left",  "start": 1,   "num_rows": 14},
+                {"label": "Right", "start": 141,  "num_rows": 17},
+            ],
+            "serpentine": True,
+            "entrance": "bottom-right",
+        }
+    if layout is None:
+        print(f"  {DIM}No DH map for {site_code} {dh}.{RESET}")
+        return
+
+    peer_set = set(int(r) for r in peer_racks) if peer_racks else set()
+    cols = layout["columns"]
+    default_per_row = layout["racks_per_row"]
+    serpentine = layout.get("serpentine", True)
+
+    def rack_at(col_start, row, pos, col_per_row=None):
+        pr = col_per_row or default_per_row
+        base = col_start + row * pr
+        if serpentine and row % 2 == 1:
+            return base + (pr - 1 - pos)
+        return base + pos
+
+    per_row = default_per_row
+
+    def build_row(col_start, row, col_per_row=None):
+        pr = col_per_row or default_per_row
+        chars = []
+        for pos in range(pr):
+            rn = rack_at(col_start, row, pos, pr)
+            if rn == target:
+                chars.append(f"{CYAN}{BOLD}@{RESET}")
+            elif rn in peer_set:
+                chars.append(f"{GREEN}{BOLD}#{RESET}")
+            else:
+                chars.append(f"{DIM}-{RESET}")
+        return "".join(chars)
+
+    # Find source column/side
+    side = "?"
+    for col in cols:
+        col_pr = col.get("racks_per_row", default_per_row)
+        col_end = col["start"] + col["num_rows"] * col_pr - 1
+        if col["start"] <= target <= col_end:
+            side = col["label"]
+            break
+
+    # Find peer sides
+    peer_sides = set()
+    for pr in peer_set:
+        for col in cols:
+            col_pr = col.get("racks_per_row", default_per_row)
+            col_end = col["start"] + col["num_rows"] * col_pr - 1
+            if col["start"] <= pr <= col_end:
+                peer_sides.add(col["label"])
+
+    max_rows = max(c["num_rows"] for c in cols)
+    COL_GAP = "       "
+
+    # Header
+    src_lbl = source_label or f"R{target}"
+    peer_nums = ", ".join(f"R{r}" for r in sorted(peer_set))
+    peer_lbl = peer_label or peer_nums
+
+    print(f"\n  {BOLD}Connection Map{RESET}  {DIM}{site_code} {dh}{RESET}")
+    print(f"  {CYAN}{BOLD}@{RESET} = {src_lbl} ({side})")
+    if peer_set:
+        print(f"  {GREEN}{BOLD}#{RESET} = {peer_lbl} ({', '.join(sorted(peer_sides))})")
+    print()
+
+    # Column headers
+    hdr_parts = []
+    for c in cols:
+        end = c["start"] + c["num_rows"] * (c.get("racks_per_row") or per_row) - 1
+        hdr_parts.append(f"{c['label']} (R{c['start']}-R{end})")
+    print(f"  {DIM}{COL_GAP.join(hdr_parts)}{RESET}")
+    print()
+
+    # Body
+    for row in range(max_rows):
+        col_strs = []
+        for ci, col in enumerate(cols):
+            if row < col["num_rows"]:
+                col_strs.append(build_row(col["start"], row, col.get("racks_per_row")))
+            else:
+                col_strs.append(" " * per_row)
+
+        # Row label (first rack of first visible column)
+        first_col = None
+        for ci in range(len(cols)):
+            if row < cols[ci]["num_rows"]:
+                first_col = cols[ci]
+                break
+        if first_col:
+            fc_pr = first_col.get("racks_per_row") or default_per_row
+            start_rack = rack_at(first_col["start"], row, 0, fc_pr)
+            line = f"  {DIM}R{start_rack:<4}{RESET} {col_strs[0]}"
+        else:
+            line = f"        {col_strs[0]}"
+        for ci in range(1, len(cols)):
+            line += COL_GAP + col_strs[ci]
+
+        # Right label
+        last_col = None
+        for ci in range(len(cols) - 1, -1, -1):
+            if row < cols[ci]["num_rows"]:
+                last_col = cols[ci]
+                break
+        if last_col:
+            lc_pr = last_col.get("racks_per_row", default_per_row)
+            end_rack = rack_at(last_col["start"], row, lc_pr - 1, lc_pr)
+            line += f"  {DIM}R{end_rack}{RESET}"
+
+        print(line)
+
+        # Aisle
+        if row % 2 == 1 and row < max_rows - 1:
+            print()
+
+    print()
+
+
+def _draw_connection_map_image(rack_loc: str, peer_racks: set | list = (),
+                               source_label: str = "", peer_label: str = "",
+                               port_info: dict | None = None):
+    """Generate and display a PNG floor plan with connection lines.
+
+    If *port_info* is provided, an elevation panel for the source rack is
+    drawn on the right showing devices at their RU positions, with the
+    selected port highlighted.
+
+    Requires Pillow.  Falls back silently if not installed.
+    Displays inline in iTerm2; saves to temp file otherwise.
+    """
+    if not _HAS_PILLOW or not _VISUAL_MAPS:
+        return
+
+    from PIL import Image, ImageDraw, ImageFont
+    import base64
+    import io
+    import tempfile
+
+    parsed = _parse_rack_location(rack_loc)
+    if not parsed:
+        return
+
+    target = parsed["rack"]
+    site_code = parsed["site_code"]
+    dh = parsed["dh"]
+
+    layout = _get_dh_layout(site_code, dh)
+    if layout is None:
+        _supported = [s.strip().upper() for s in os.environ.get("SUPPORTED_SITES", "").split(",") if s.strip()]
+        _is_supported = dh.upper() == "DH1" and _supported and any(
+            s in site_code.upper() for s in _supported)
+        if _is_supported:
+            layout = {
+                "racks_per_row": 10,
+                "columns": [
+                    {"label": "Left",  "start": 1,   "num_rows": 14},
+                    {"label": "Right", "start": 141,  "num_rows": 17},
+                ],
+                "serpentine": True,
+            }
+        else:
+            return
+
+    peer_set = set(int(r) for r in peer_racks) if peer_racks else set()
+    cols = layout["columns"]
+    default_pr = layout["racks_per_row"]
+    serpentine = layout.get("serpentine", True)
+
+    # --- Sizing constants ---
+    CELL_W, CELL_H = 54, 42
+    CELL_GAP = 6
+    ROW_PITCH = CELL_H + CELL_GAP
+    AISLE_EXTRA = 30
+    COL_GAP_PX = 200
+    MARGIN_L, MARGIN_T = 110, 120
+    MARGIN_B = 110
+
+    # --- Compute column pixel offsets ---
+    col_offsets = []
+    x_cursor = 0
+    for ci, col in enumerate(cols):
+        col_offsets.append(x_cursor)
+        pr = col.get("racks_per_row", default_pr)
+        x_cursor += pr * (CELL_W + CELL_GAP) + COL_GAP_PX
+
+    max_rows = max(c["num_rows"] for c in cols)
+    img_w = MARGIN_L + x_cursor - COL_GAP_PX + 50
+    img_h = MARGIN_T + max_rows * ROW_PITCH + (max_rows // 2) * AISLE_EXTRA + MARGIN_B
+
+    # --- Helper: rack_at ---
+    def rack_at(col_start, row, pos, col_per_row=None):
+        pr = col_per_row or default_pr
+        base = col_start + row * pr
+        if serpentine and row % 2 == 1:
+            return base + (pr - 1 - pos)
+        return base + pos
+
+    # --- Helper: rack number → pixel center ---
+    def rack_to_px(rack_num):
+        for ci, col in enumerate(cols):
+            pr = col.get("racks_per_row", default_pr)
+            col_end = col["start"] + col["num_rows"] * pr - 1
+            if col["start"] <= rack_num <= col_end:
+                offset = rack_num - col["start"]
+                row = offset // pr
+                pos = offset % pr
+                if serpentine and row % 2 == 1:
+                    pos = pr - 1 - pos
+                px = MARGIN_L + col_offsets[ci] + pos * (CELL_W + CELL_GAP)
+                py = MARGIN_T + row * ROW_PITCH + (row // 2) * AISLE_EXTRA
+                return (px + CELL_W // 2, py + CELL_H // 2)
+        return None
+
+    # --- Colors (CRT theme) ---
+    BG       = (12, 13, 18)
+    RACK_DIM = (40, 42, 54)
+    SRC_CLR  = (86, 182, 194)    # cyan
+    PEER_CLR = (152, 195, 121)   # green
+    LINE_CLR = (212, 148, 58)    # amber
+    LABEL_CLR = (107, 109, 128)  # dim
+    TEXT_CLR  = (200, 201, 212)
+
+    # --- Create image ---
+    img = Image.new("RGB", (img_w, img_h), BG)
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 24)
+        font_sm = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 18)
+    except (OSError, IOError):
+        font = ImageFont.load_default()
+        font_sm = font
+
+    # --- Header ---
+    header = f"{site_code} {dh} — Connection Map"
+    draw.text((MARGIN_L, 30), header, fill=TEXT_CLR, font=font)
+
+    # --- Draw column labels ---
+    for ci, col in enumerate(cols):
+        pr = col.get("racks_per_row", default_pr)
+        end = col["start"] + col["num_rows"] * pr - 1
+        lbl = f"{col['label']} (R{col['start']}–R{end})"
+        lx = MARGIN_L + col_offsets[ci]
+        draw.text((lx, MARGIN_T - 32), lbl, fill=LABEL_CLR, font=font_sm)
+
+    # --- Draw all racks ---
+    for ci, col in enumerate(cols):
+        pr = col.get("racks_per_row", default_pr)
+        for row in range(col["num_rows"]):
+            for pos in range(pr):
+                rn = rack_at(col["start"], row, pos, pr)
+                px = MARGIN_L + col_offsets[ci] + pos * (CELL_W + CELL_GAP)
+                py = MARGIN_T + row * ROW_PITCH + (row // 2) * AISLE_EXTRA
+
+                if rn == target:
+                    color = SRC_CLR
+                elif rn in peer_set:
+                    color = PEER_CLR
+                else:
+                    color = RACK_DIM
+
+                draw.rectangle([px, py, px + CELL_W, py + CELL_H], fill=color)
+
+            # Row label on first column
+            if ci == 0:
+                start_rack = rack_at(col["start"], row, 0, pr)
+                ly = MARGIN_T + row * ROW_PITCH + (row // 2) * AISLE_EXTRA + 1
+                draw.text((6, ly), f"R{start_rack}", fill=LABEL_CLR, font=font_sm)
+
+    # --- Draw connection lines (amber, with glow) ---
+    src_px = rack_to_px(target)
+    if src_px:
+        for pr_num in peer_set:
+            dst_px = rack_to_px(pr_num)
+            if dst_px:
+                # Glow layer
+                draw.line([src_px, dst_px], fill=(LINE_CLR[0], LINE_CLR[1], LINE_CLR[2]),
+                          width=12)
+                # Core line
+                draw.line([src_px, dst_px], fill=(255, 200, 100), width=4)
+
+    # --- Legend ---
+    ly = img_h - 75
+    # Source
+    draw.rectangle([MARGIN_L, ly, MARGIN_L + 28, ly + 22], fill=SRC_CLR)
+    src_lbl = source_label or f"R{target}"
+    draw.text((MARGIN_L + 38, ly), src_lbl, fill=TEXT_CLR, font=font_sm)
+    # Peer
+    off2 = MARGIN_L + 420
+    draw.rectangle([off2, ly, off2 + 28, ly + 22], fill=PEER_CLR)
+    plbl = peer_label or ", ".join(f"R{r}" for r in sorted(peer_set))
+    draw.text((off2 + 38, ly), plbl, fill=TEXT_CLR, font=font_sm)
+    # Line
+    off3 = off2 + 460
+    draw.line([(off3, ly + 11), (off3 + 50, ly + 11)], fill=LINE_CLR, width=4)
+    draw.text((off3 + 60, ly), "connection", fill=LABEL_CLR, font=font_sm)
+
+    # --- Elevation panel (right side) ---
+    if port_info and port_info.get("rack_id"):
+        try:
+            elev_devices = _netbox_get_rack_devices(port_info["rack_id"])
+        except Exception:
+            elev_devices = []
+        if elev_devices:
+            dt_heights = _fetch_device_type_heights(elev_devices)
+
+            # Fetch rack height
+            try:
+                rack_data = _netbox_get(f"/dcim/racks/{port_info['rack_id']}/")
+                rack_height = int(rack_data.get("u_height", 42)) if rack_data else 42
+            except Exception:
+                rack_height = 42
+
+            # Build slot map
+            elev_slots = {}
+            elev_top_ru = {}
+            elev_dev_height = {}
+            for dev in elev_devices:
+                pos = dev.get("position")
+                if not pos:
+                    continue
+                pos = int(pos)
+                dt_id = (dev.get("device_type") or {}).get("id")
+                h = int(dt_heights.get(dt_id, 1))
+                name = dev.get("name") or dev.get("display") or "?"
+                elev_dev_height[name] = h
+                elev_top_ru[name] = pos + h - 1
+                for u in range(pos, pos + h):
+                    elev_slots[u] = dev
+            if elev_slots:
+                rack_height = max(rack_height, max(elev_slots.keys()))
+
+            # Elevation panel sizing
+            ELEV_W = 320
+            ELEV_MARGIN = 60
+            ELEV_X = img_w + ELEV_MARGIN  # start of elevation panel
+            RU_H = max(8, (img_h - MARGIN_T - MARGIN_B - 60) // rack_height)
+            ELEV_RACK_W = 180
+            ELEV_RACK_X = ELEV_X + 70  # leave room for U labels
+            ELEV_TOP = MARGIN_T + 30
+
+            # Widen canvas
+            new_w = ELEV_X + ELEV_W + 40
+            new_img = Image.new("RGB", (new_w, img_h), BG)
+            new_img.paste(img, (0, 0))
+            img = new_img
+            draw = ImageDraw.Draw(img)
+
+            # Divider line
+            div_x = img_w + ELEV_MARGIN // 2
+            draw.line([(div_x, MARGIN_T - 10), (div_x, img_h - MARGIN_B + 10)],
+                      fill=LABEL_CLR, width=1)
+
+            # Elevation header
+            rack_name = port_info.get("rack_name", f"R{target}")
+            draw.text((ELEV_X, 30), f"Rack Elevation", fill=TEXT_CLR, font=font)
+
+            # Draw rack frame
+            rack_bottom = ELEV_TOP + rack_height * RU_H
+            draw.rectangle(
+                [ELEV_RACK_X - 2, ELEV_TOP - 2, ELEV_RACK_X + ELEV_RACK_W + 2, rack_bottom + 2],
+                outline=LABEL_CLR, width=1)
+
+            # Current device info
+            cur_name = port_info.get("device_name", "")
+            cur_pos = port_info.get("position")
+            cur_pos = int(cur_pos) if cur_pos else None
+
+            # Draw each RU (bottom-up: U1 at bottom)
+            for u in range(1, rack_height + 1):
+                # Y position: U1 at bottom, U{rack_height} at top
+                uy = rack_bottom - u * RU_H
+                dev = elev_slots.get(u)
+
+                if dev:
+                    name = dev.get("name") or dev.get("display") or "?"
+                    is_current = cur_name and name == cur_name
+                    is_top = (elev_top_ru.get(name) == u)
+
+                    if is_current:
+                        color = SRC_CLR
+                    else:
+                        color = (55, 58, 72)
+
+                    draw.rectangle(
+                        [ELEV_RACK_X, uy, ELEV_RACK_X + ELEV_RACK_W, uy + RU_H - 1],
+                        fill=color)
+
+                    # Label on top RU of each device
+                    if is_top and RU_H >= 10:
+                        short = _short_device_name(name)
+                        try:
+                            tiny = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", min(11, RU_H - 2))
+                        except (OSError, IOError):
+                            tiny = font_sm
+                        lbl_clr = BG if is_current else LABEL_CLR
+                        draw.text((ELEV_RACK_X + 4, uy + 1), short[:18], fill=lbl_clr, font=tiny)
+                else:
+                    # Empty slot
+                    draw.rectangle(
+                        [ELEV_RACK_X, uy, ELEV_RACK_X + ELEV_RACK_W, uy + RU_H - 1],
+                        fill=(20, 21, 28))
+
+                # U labels every 5U or at device boundaries
+                if u % 5 == 0 or u == 1 or u == rack_height:
+                    try:
+                        tiny = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 10)
+                    except (OSError, IOError):
+                        tiny = font_sm
+                    draw.text((ELEV_RACK_X - 40, uy + 1), f"U{u}", fill=LABEL_CLR, font=tiny)
+
+            # Highlight selected port with arrow
+            if cur_pos and port_info.get("port"):
+                cur_h = elev_dev_height.get(cur_name, 1)
+                # Arrow at midpoint of current device
+                mid_u = cur_pos + cur_h // 2
+                arrow_y = rack_bottom - mid_u * RU_H + RU_H // 2
+                arrow_x = ELEV_RACK_X + ELEV_RACK_W + 8
+
+                # Arrow line
+                draw.line([(arrow_x, arrow_y), (arrow_x + 40, arrow_y)],
+                          fill=LINE_CLR, width=3)
+                # Arrowhead
+                draw.polygon([
+                    (arrow_x, arrow_y),
+                    (arrow_x + 8, arrow_y - 5),
+                    (arrow_x + 8, arrow_y + 5),
+                ], fill=LINE_CLR)
+
+                # Port label
+                port_text = port_info["port"]
+                draw.text((arrow_x + 46, arrow_y - 10), port_text,
+                          fill=LINE_CLR, font=font_sm)
+
+            # Peer info below elevation
+            if port_info.get("peer"):
+                info_y = rack_bottom + 16
+                port_name = port_info.get("port", "?")
+                draw.text((ELEV_X, info_y),
+                          f"{port_name} → {port_info['peer']}",
+                          fill=TEXT_CLR, font=font_sm)
+
+    # --- Output ---
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    is_iterm2 = os.environ.get("TERM_PROGRAM", "") == "iTerm.app"
+    if is_iterm2:
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        osc = f"\033]1337;File=inline=1;size={len(png_bytes)};width=auto;height=auto;preserveAspectRatio=1:{b64}\a"
+        sys.stdout.write("\n")
+        sys.stdout.write(osc)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    else:
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".png", prefix="cwhelper_connmap_", delete=False,
+            dir=os.environ.get("TMPDIR", "/tmp"))
+        tmp.write(png_bytes)
+        tmp.close()
+        print(f"\n  {DIM}Connection map saved to {tmp.name}{RESET}")
 
 
 def _fetch_device_type_heights(devices: list) -> dict:

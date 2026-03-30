@@ -168,7 +168,7 @@ Status meanings:
 - "RMA-initiate" = RMA swap DO coming soon
 - "Awaiting Parts" = DO when parts arrive
 """
-    return f"""You are generating a shift brief for a CoreWeave Data Center Technician (DCT) at {site_label}.
+    return f"""You are generating a shift brief for a Data Center Technician (DCT) at {site_label}.
 
 DCT context:
 - DO tickets = hands-on physical work (reseat, swap, cable, power cycle). DCTs execute these on the floor.
@@ -330,11 +330,11 @@ _DEMO_BRIEF = """\
 **Suggested First Move**: Walk to R04.U19 — DO-48823 is your ticket, the node is down, and the RMA is already open. Pull iDRAC logs and confirm the GPU failure before touching anything else."""
 
 
-def _run_demo_brief(site: str = "US-CENTRAL-07A") -> None:
+def _run_demo_brief(site: str = "") -> None:
     """Demo mode: realistic mock data, no credentials required."""
     import time
 
-    site_label = site or "US-CENTRAL-07A"
+    site_label = site or os.environ.get("DEFAULT_SITE", "")
 
     print(f"\n  {DIM}[DEMO MODE] Fetching open queue...{RESET}", end="", flush=True)
     time.sleep(1.2)
@@ -355,7 +355,7 @@ def _run_demo_brief(site: str = "US-CENTRAL-07A") -> None:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_shift_brief(email: str, token: str, site: str = "US-CENTRAL-07A",
+def run_shift_brief(email: str, token: str, site: str = "",
                     mine_first: bool = False, demo: bool = False) -> None:
     """Fetch queue, call Claude, print shift brief. Called from CLI and menu."""
     if demo:

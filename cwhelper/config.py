@@ -46,10 +46,10 @@ __all__ = [
     '_JQL_CACHE_TTL', '_ISSUE_CACHE_MAX', '_NETBOX_CACHE_MAX', '_JQL_CACHE_MAX',
     'HO_RADAR_STATUSES', 'PROCEDURE_KITS',
     'QUEUE_FILTERS', 'STALE_UNASSIGNED_HOURS', '_DEFAULT_STATE',
-    '_HAS_OPENAI', '_openai_mod',
+    '_HAS_OPENAI', '_openai_mod', '_HAS_PILLOW',
     '_session', '_executor',
     '_issue_cache', '_netbox_cache', '_jql_cache',
-    '_ANIMATE', '_AI_ENABLED', 'NTFY_TOPIC', '_NTFY_ENABLED',
+    '_ANIMATE', '_VISUAL_MAPS', '_AI_ENABLED', 'NTFY_TOPIC', '_NTFY_ENABLED', '_FLEET_ENABLED',
     '_my_account_id', '_my_display_name', '_relates_link_type',
     '_watcher_thread', '_watcher_stop_event', '_watcher_queue',
     '_watcher_site', '_watcher_project', '_watcher_interval',
@@ -67,20 +67,26 @@ except ImportError:
     _openai_mod = None
     _HAS_OPENAI = False
 
+try:
+    from PIL import Image as _pil_Image, ImageDraw as _pil_ImageDraw
+    _HAS_PILLOW = True
+except ImportError:
+    _HAS_PILLOW = False
+
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "6.4.0"
+APP_VERSION = "6.5.0"
 
-JIRA_BASE_URL = "https://coreweave.atlassian.net"
+JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "https://your-org.atlassian.net")
 
 # Jira issue key pattern: uppercase letters, dash, digits (e.g. DO-12345)
 JIRA_KEY_PATTERN = re.compile(r"^[A-Z]+-\d+$")
 
 # Known custom field IDs discovered from real DO/HO ticket JSON.
 CUSTOM_FIELDS = {
-    "customfield_10207": "rack_location",   # cf[10207] — e.g. "US-BVI01.DC7.R297.RU18"
+    "customfield_10207": "rack_location",   # cf[10207] — e.g. "US-SITE01.DC7.R297.RU18"
     "customfield_10193": "service_tag",     # cf[10193] — e.g. "10NQ724"
     "customfield_10192": "hostname",        # cf[10192] — e.g. "d0001142"
     "customfield_10194": "site",            # cf[10194] — e.g. "US-EAST-03"
@@ -105,12 +111,12 @@ ISSUE_DETAIL_FIELDS = [
 ]
 
 # Known site strings (from Jira cf[10194] values seen in real tickets).
-KNOWN_SITES = [
-    "US-CENTRAL-07A",   # Elk Grove (The Elks)
-    "US-CENTRAL-01A",   # Volo (VO201 / ORD3)
-    "US-EAST-03",
-    "US-EAST-03A",
-    "US-EAST-13A",      # Caledonia / Grand Rapids
+KNOWN_SITES = [s.strip() for s in os.environ.get("KNOWN_SITES", "").split(",") if s.strip()] or [
+    "US-SITE-01A",
+    "US-SITE-02A",
+    "US-SITE-03",
+    "US-SITE-03A",
+    "US-SITE-04A",
 ]
 
 # ---------------------------------------------------------------------------
@@ -167,7 +173,7 @@ AI_MAX_TOKENS = 1024
 AI_TEMPERATURE = 0.3
 
 _AI_DOMAIN_KNOWLEDGE = (
-    "\n\n--- CoreWeave Jira Ticket System ---\n"
+    "\n\n--- Jira Ticket System ---\n"
     "PROJECTS:\n"
     "- DO (Data Operations): Hands-on DCT work — reseat, swap, cable, power cycle, inspections. "
     "Created when physical site work is needed. DCTs pick these up.\n"
@@ -301,7 +307,7 @@ _AI_DOMAIN_KNOWLEDGE = (
 
 AI_SYSTEM_PROMPT_TICKET = (
     "You are a data center operations assistant embedded in a CLI tool called cwhelper. "
-    "You help CoreWeave DCT technicians understand Jira tickets and troubleshoot node issues.\n\n"
+    "You help DCT technicians understand Jira tickets and troubleshoot node issues.\n\n"
     "Context you receive:\n"
     "- Jira ticket details (key, summary, status, assignee, description, comments)\n"
     "- NetBox device data (rack location, interfaces, IPs, model)\n"
@@ -320,7 +326,7 @@ AI_SYSTEM_PROMPT_TICKET = (
 )
 
 AI_SYSTEM_PROMPT_FINDER = (
-    "You are a search assistant for CoreWeave Jira tickets. "
+    "You are a search assistant for Jira tickets. "
     "The user will describe what they remember about a ticket. Your job is to:\n"
     "1. Extract search keywords from their description.\n"
     "2. After seeing search results, rank them by relevance and explain why each might be the one.\n"
@@ -330,7 +336,7 @@ AI_SYSTEM_PROMPT_FINDER = (
 )
 
 AI_SYSTEM_PROMPT_CHAT = (
-    "You are a helpful assistant for data center technicians at CoreWeave. "
+    "You are a helpful assistant for data center technicians. "
     "You have access to the current ticket context if provided. Answer questions naturally. "
     "Be concise — this is a terminal interface. "
     "FORMATTING: NEVER use markdown — no **, no *, no ##, no ```, no >. no bullet dots. "
@@ -438,6 +444,10 @@ _jql_cache: dict[str, tuple[float, list]] = {}
 
 # Animation toggle
 _ANIMATE = os.environ.get("CWHELPER_ANIMATE", "1") != "0"
+_VISUAL_MAPS = os.environ.get("CWHELPER_VISUAL_MAPS", "1") != "0"
+
+# Fleet (cwctl) toggle
+_FLEET_ENABLED = os.environ.get("CWHELPER_FLEET", "1") != "0"
 
 # AI toggle
 _AI_ENABLED = True

@@ -42,6 +42,7 @@ from cwhelper.services.rack import _handle_rack_view, _handle_rack_neighbors, _d
 from cwhelper.services.ai import _ai_available, _ai_dispatch, _ai_chat_loop, _ai_find_ticket, _ai_summarize, _suggest_comments, _pick_or_type_comment
 from cwhelper.clients.jira import _is_mine, _refresh_ctx, _post_comment, _upload_attachment, _grab_ticket, _assign_ticket, _jira_link_issues, _get_existing_links, _execute_transition, _get_my_account_id, _jira_get, _jira_put, _jira_get_issue, _text_to_adf, _get_credentials, _fetch_site_teammates, _jira_user_search
 from cwhelper.clients.netbox import _netbox_find_rack_by_name
+from cwhelper.clients.fleet import _cwctl_available, _cwctl_rack_blockers
 from cwhelper.services.search import _jql_search
 from cwhelper.state import _load_user_state, _save_user_state, _record_ticket_view, _add_bookmark, _remove_bookmark
 from cwhelper.cache import _brief_pause, _escape_jql
@@ -184,6 +185,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
     show_more = ctx.get("_show_more_actions", False)
     mine = _is_mine(ctx)
     status_lower = ctx.get("status", "").lower()
+    has_node_id = ctx.get("service_tag") or ctx.get("hostname")
 
     print(f"  {DIM}{line}{RESET}")
     print()
@@ -247,7 +249,12 @@ def _print_action_panel(ctx: dict, state: dict = None):
     if ctx.get("diag_links"):
         diag_label = "Close Diags" if ctx.get("_show_diags") else "Diags"
         view_items.append(btn("d", diag_label, BLUE))
+    if _cwctl_available():
+        bl_label = "Close Blockers" if ctx.get("_show_blockers") else "Blockers"
+        view_items.append(btn("bl", bl_label, RED))
     view_items.append(btn("img", "Attach Screenshot", MAGENTA))
+    if has_node_id:
+        view_items.append(btn("vr", "Verify", GREEN))
     if view_items:
         print(f"  {BOLD}{WHITE}View{RESET}")
         print(f"    {'   '.join(view_items)}")
@@ -328,7 +335,6 @@ def _print_action_panel(ctx: dict, state: dict = None):
             print()
 
     # ── NAV (hidden by default — press ? to show) ──
-    has_node_id = ctx.get("service_tag") or ctx.get("hostname")
     nav_items = [btn("b", "Back", DIM), btn("m", "Menu", DIM)]
     if has_node_id:
         nav_items.append(btn("hn", "History", DIM))
@@ -358,17 +364,17 @@ def _print_action_panel(ctx: dict, state: dict = None):
                 step = "Press [s] to start work on this ticket"
         elif status_lower == "in progress" and mine:
             if "recable" in summary_lower or "recable" in ho_hint:
-                step = "Recable node, comment what you did, press [v] to verify"
+                step = "Recable node, comment what you did, [vr] verify → [v] to move"
             elif "power_cycle" in summary_lower.replace(" ", "_"):
-                step = "Power cycle, confirm node is up, press [v] to verify"
+                step = "Power cycle done? [vr] verify node is up → [v] to move"
             elif "reseat" in summary_lower:
-                step = "Reseat component, check BMC/Grafana, press [v] to verify"
+                step = "Reseat done? [vr] verify health → [v] to move"
             elif "swap" in summary_lower:
-                step = "Swap component, note old/new serials, press [v] to verify"
+                step = "Swap done? Note old/new serials, [vr] verify → [v] to move"
             elif "cable" in summary_lower:
-                step = "Replace cable per procedure, press [v] when verified"
+                step = "Cable replaced? [vr] verify → [v] to move"
             else:
-                step = "Done? Press [v] to verify — not done? Press [y] for hold"
+                step = "Done? [vr] verify node → [v] to move — not done? [y] for hold"
         elif status_lower == "verification" and mine:
             if age > 48 * 3600:
                 step = f"STALE ({_format_age(age)}) — press [k] to close or [z] to reopen"
@@ -1154,11 +1160,12 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             slug = netbox.get("site_slug")
             node_hex = ctx.get("node_name") or ""
             if dev and slug:
-                url = f"https://bmc-{dev}.teleport.{slug}.int.coreweave.com/"
+                _tp_domain = os.environ.get("TELEPORT_DOMAIN", "int.example.com")
+                url = f"https://bmc-{dev}.teleport.{slug}.{_tp_domain}/"
                 has_tsh = False
                 try:
-                    from cwhelper.clients.teleport import _tsh_available
-                    has_tsh = _tsh_available()
+                    from cwhelper.clients.teleport import _tsh_available, _tsh_ensure_login
+                    has_tsh = _tsh_available() or _tsh_ensure_login(interactive=True)
                 except ImportError:
                     pass
                 if has_tsh:
@@ -1269,7 +1276,15 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             key = ctx.get("issue_key", "?")
             tmp_path = os.path.join(tempfile.gettempdir(), f"{key}_screenshot.png")
             print(f"\n  {DIM}Reading clipboard image...{RESET}", end="", flush=True)
-            result = subprocess.run(["pngpaste", tmp_path], capture_output=True)
+            try:
+                result = subprocess.run(["pngpaste", tmp_path], capture_output=True)
+            except FileNotFoundError:
+                print(f"\r  {YELLOW}pngpaste not found.{RESET}  "
+                      f"{DIM}Install with: brew install pngpaste{RESET}")
+                _brief_pause(2)
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
             if result.returncode != 0:
                 print(f"\r  {YELLOW}No image in clipboard.{RESET}  "
                       f"{DIM}Take a screenshot first (Cmd+Shift+4), then press [img].{RESET}")
@@ -1310,7 +1325,87 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                 time.sleep(0.5)
                 _refresh_ctx(ctx, email, token)
             else:
-                print(f"\r  {YELLOW}Could not revert {key} to Verification.{RESET}              ")
+                # Direct Verification not available — try Reopen → Verification chain
+                _avail = [t.get("name", "").lower() for t in (ctx.get("_transitions") or [])]
+                if any("reopen" in a for a in _avail):
+                    print(f"\r  {DIM}Reopening {key} first...{RESET}                    ", flush=True)
+                    ctx["_transitions"] = None  # reset cached transitions
+                    if _execute_transition(ctx, "resume", email, token):
+                        time.sleep(0.3)
+                        ctx["_transitions"] = None  # refetch after status change
+                        print(f"  {DIM}Now moving to Verification...{RESET}", end="", flush=True)
+                        if _execute_transition(ctx, "verify", email, token):
+                            print(f"\r  {BLUE}{BOLD}{key} → Reopened → Verification{RESET}                    ")
+                            _log_event("verify", key, ctx.get("summary", ""), "reopened then moved to Verification", ctx=ctx)
+                            time.sleep(0.5)
+                            _refresh_ctx(ctx, email, token)
+                        else:
+                            print(f"\r  {YELLOW}Reopened {key} but could not move to Verification.{RESET}              ")
+                            _refresh_ctx(ctx, email, token)
+                            _brief_pause()
+                    else:
+                        print(f"\r  {YELLOW}Could not reopen {key}.{RESET}              ")
+                        _brief_pause()
+                else:
+                    print(f"\r  {YELLOW}Could not revert {key} to Verification.{RESET}              ")
+                    _brief_pause()
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
+
+        # --- Rack Blockers (cwctl) ---
+        if choice == "bl" and ctx:
+            if ctx.get("_show_blockers"):
+                ctx["_show_blockers"] = False
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+            # Try to get cwctl rack name from NetBox device, or prompt user
+            rack_name = (ctx.get("netbox", {}).get("cwctl_rack")
+                         or ctx.get("_cwctl_rack_name", ""))
+            if not rack_name:
+                print(f"\n  {DIM}cwctl rack name not in context (Jira uses physical location, cwctl uses K8s names).{RESET}")
+                try:
+                    rack_name = input(f"  Enter cwctl rack name (e.g. gb200-rack-site01-r064): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    rack_name = ""
+            if not rack_name:
+                print(f"\n  {YELLOW}No rack name found in ticket context.{RESET}")
+                _brief_pause()
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+            ctx["_cwctl_rack_name"] = rack_name  # cache for toggle
+            print(f"\n  {DIM}Fetching checkpoint blockers for {rack_name}...{RESET}", flush=True)
+            blockers = _cwctl_rack_blockers(rack_name)
+            if blockers:
+                ctx["_show_blockers"] = True
+                print(f"\n  {RED}{BOLD}Checkpoint Blockers — {rack_name}{RESET}  ({len(blockers)} total)\n")
+                for i, blk in enumerate(blockers, 1):
+                    severity = blk.get("severity", "unknown")
+                    sev_color = RED if severity.lower() in ("critical", "error") else YELLOW
+                    reason = blk.get("reason", "")
+                    source = blk.get("source", "")
+                    message = blk.get("message", "")
+                    first_obs = blk.get("first-observed", blk.get("firstObserved", ""))
+                    last_obs = blk.get("last-observed", blk.get("lastObserved", ""))
+                    print(f"  {sev_color}{BOLD}{i}. [{severity}]{RESET}  {WHITE}{reason}{RESET}")
+                    if source:
+                        print(f"     {DIM}source:{RESET} {source}")
+                    if message:
+                        # Wrap long messages
+                        msg_lines = textwrap.wrap(message, width=70)
+                        for ml in msg_lines:
+                            print(f"     {ml}")
+                    if first_obs or last_obs:
+                        print(f"     {DIM}first: {first_obs}  last: {last_obs}{RESET}")
+                    print()
+                input(f"  {DIM}Press ENTER to continue...{RESET}")
+            elif blockers is not None:
+                print(f"\n  {GREEN}{BOLD}No blockers{RESET} — rack {rack_name} is clear.")
+                _brief_pause()
+            else:
+                print(f"\n  {YELLOW}Could not fetch blockers.{RESET} {DIM}(cwctl error or no kubeconfig){RESET}")
                 _brief_pause()
             _clear_screen()
             _print_pretty(ctx)
@@ -1441,7 +1536,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                     _site = ctx.get("site") or ""
                     # Determine DH/sector from netbox or default
                     _nb = ctx.get("netbox") or {}
-                    _dh = "SEC1"  # default for hostname-derived
+                    _dh = "DH1"  # default for hostname-derived
                     if _nb.get("rack"):
                         # Try to get DH from existing rack_location parse
                         _p = _parse_rack_location(ctx.get("rack_location", ""))
@@ -1498,6 +1593,87 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                 print(f"\n    {DIM}Press {RESET}{WHITE}{BOLD}[w]{RESET}{DIM} again to close{RESET}")
                 print()
             continue
+        if choice == "vr" and ctx:
+            # Inline verify — run verification checks without leaving TUI
+            from cwhelper.services.verify import run_verify, run_verify_batch, _detect_flow
+            has_node_id = ctx.get("service_tag") or ctx.get("hostname")
+            if has_node_id:
+                identifier = ctx.get("issue_key") or ctx.get("hostname") or ctx.get("service_tag") or ""
+                if identifier:
+                    desc = ctx.get("description_text", "")
+                    summ = ctx.get("summary", "")
+                    flow_hint = _detect_flow(f"{summ} {desc}")
+                    flow_arg = flow_hint if flow_hint != "general" else None
+
+                    # Check for rack siblings — offer batch if multiple DO tickets
+                    rack_loc = ctx.get("rack_location", "")
+                    rack_serials = []
+                    rack_label = ""
+                    if rack_loc:
+                        import re as _re
+                        rack_m = _re.search(r"R(\d+)", rack_loc)
+                        if rack_m:
+                            rack_num = rack_m.group(1)
+                            rack_label = f"R{rack_num}"
+                            try:
+                                from cwhelper.clients.jira import _get_credentials
+                                from cwhelper.services.search import _jql_search
+                                email, token = _get_credentials()
+                                jql = (f'project = "DO" AND "Rack Location" ~ "R{rack_num}"'
+                                       f' ORDER BY created DESC')
+                                siblings = _jql_search(jql, email, token, max_results=20,
+                                    fields=["customfield_10193", "summary"])
+                                for sib in siblings:
+                                    sf = sib.get("fields", {})
+                                    stag = sf.get("customfield_10193")
+                                    if isinstance(stag, dict):
+                                        stag = stag.get("value", "")
+                                    elif isinstance(stag, list):
+                                        stag = stag[0] if stag else ""
+                                    stag = str(stag or "").strip()
+                                    if stag and stag not in rack_serials:
+                                        rack_serials.append(stag)
+                            except Exception:
+                                rack_serials = []
+
+                    if len(rack_serials) > 1:
+                        print(f"\n  {BOLD}Found {len(rack_serials)} nodes in {rack_label} with open DO tickets.{RESET}")
+                        print(f"  {DIM}[b] Batch verify all  [s] Single node only{RESET}")
+                        try:
+                            batch_choice = input(f"  {BOLD}>{RESET} ").strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            batch_choice = "s"
+                        if batch_choice == "b":
+                            from cwhelper.services.verify import _FLOW_LABELS
+                            flow_label = _FLOW_LABELS.get(flow_arg or "", "")
+                            run_verify_batch(rack_serials, rack_label=rack_label,
+                                             flow_label=flow_label)
+                            print(f"  {DIM}Press ENTER to return to ticket view...{RESET}")
+                            try:
+                                input()
+                            except (EOFError, KeyboardInterrupt):
+                                pass
+                            _clear_screen()
+                            _print_pretty(ctx)
+                            continue
+
+                    # Single-node verify (default)
+                    hints = {}
+                    if ctx.get("hostname"):
+                        hints["hostname"] = ctx["hostname"]
+                    print()
+                    run_verify(identifier, flow_type=flow_arg, hints=hints or None)
+                    print(f"  {DIM}Press ENTER to return to ticket view...{RESET}")
+                    try:
+                        input()
+                    except (EOFError, KeyboardInterrupt):
+                        pass
+                else:
+                    print(f"\n  {YELLOW}No identifier available for verification.{RESET}")
+                    _brief_pause()
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
         if choice == "e" and ctx and email and token:
             netbox = ctx.get("netbox") or {}
             # Resolve rack_id from rack_location if NetBox didn't have it
@@ -1511,7 +1687,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                     if rack_match:
                         rack_num = int(rack_match.group(1).lstrip("0") or "0")
                         site_code = ctx.get("site") or (site_match.group(1) if site_match else "")
-                        parsed_rl = {"site_code": site_code, "dh": "SEC1", "rack": rack_num, "ru": None}
+                        parsed_rl = {"site_code": site_code, "dh": "DH1", "rack": rack_num, "ru": None}
                 if parsed_rl:
                     site_slug = netbox.get("site_slug") or ""
                     # Derive site_slug from Jira site code when NetBox doesn't have it

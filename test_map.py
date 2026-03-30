@@ -104,8 +104,8 @@ def verify():
     print("All serpentine math checks passed!")
 
 verify()
-for rack in ["US-EVI01.DH1.R64.RU34", "US-EVI01.DH1.R18.RU10",
-             "US-EVI01.DH1.R311.RU5", "US-EVI01.DH1.R1.RU1",
-             "US-EVI01.DH1.R141.RU20"]:
+for rack in ["US-SITE01.DH1.R64.RU34", "US-SITE01.DH1.R18.RU10",
+             "US-SITE01.DH1.R311.RU5", "US-SITE01.DH1.R1.RU1",
+             "US-SITE01.DH1.R141.RU20"]:
     print(f"{'='*55}")
     _draw_mini_dh_map(rack)

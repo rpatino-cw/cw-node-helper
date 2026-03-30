@@ -1,6 +1,6 @@
 # CW Node Helper
 
-CoreWeave DCT terminal companion — Jira + NetBox + Grafana queue browser.
+DCT terminal companion — Jira + NetBox + Grafana queue browser.
 Single-file Python CLI for data center operations ticket management.
 
 ## Quick Reference

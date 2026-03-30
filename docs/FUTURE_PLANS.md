@@ -48,7 +48,7 @@ Finish the features that make the tool genuinely better than Jira UI for daily D
 ### 1.2 Menu Additions (Low-Effort, High-Impact)
 
 **7. Settings / Defaults** — Let users set once instead of re-answering each time:
-- Default **site** (e.g. `US-CENTRAL-07A`)
+- Default **site** (e.g. `US-SITE-01A`)
 - Default **project** (DO/HO)
 - Default **poll interval** for watch
 - Maybe toggle "remember last menu selection"
@@ -59,7 +59,7 @@ Saves as `~/.cwhelper.yaml` or similar. Falls back to built-in defaults if no fi
 ```text
 8  Site summary      (status counts for a site)
 
-US-CENTRAL-07A – DO tickets
+US-SITE-01A – DO tickets
   Open            12
   In Progress      7
   Verification    15
@@ -70,7 +70,7 @@ Uses existing `_jql_search` with grouped status queries. Gives a snapshot of que
 
 ### 1.3 Improved Connections Display
 
-Current format is flat: `BMC  bmc0  -> switch dh1-bmc-a2-01-r012-us-central-07a port swp13`. Hard to scan when there are 6+ interfaces.
+Current format is flat: `BMC  bmc0  -> switch dh1-bmc-a2-01-r012-us-site-01a port swp13`. Hard to scan when there are 6+ interfaces.
 
 **Proposed format** — group by purpose, add human labels, align columns:
 ```text
@@ -87,12 +87,12 @@ Connections (where this node is plugged in)
 
 **Key changes:**
 - Group by purpose: "Management / BMC" vs "Data / Fabric"
-- Shorten switch names: strip site suffix (e.g. `-us-central-07a`)
+- Shorten switch names: strip site suffix (e.g. `-us-site-01a`)
 - Add human labels: "BMC switch", "TOR (left/right)" instead of raw hostnames
 - Extract rack from switch name for quick reference
 - Align columns so eyes can scan: role -> switch label -> switch name -> rack -> port
 
-**Requires:** Sample real NetBox interface data to validate the switch naming convention at US-CENTRAL-07A. The parsing logic (strip site suffix, detect left/right TOR, extract rack) depends on actual switch hostnames.
+**Requires:** Sample real NetBox interface data to validate the switch naming convention at US-SITE-01A. The parsing logic (strip site suffix, detect left/right TOR, extract rack) depends on actual switch hostnames.
 
 ### 1.4 Network Topology Map
 - **Visual topology view** — ASCII/terminal rendering of how a node connects to the network fabric.
@@ -128,7 +128,7 @@ Connections (where this node is plugged in)
 - Uses existing serpentine math from `_draw_mini_dh_map`
 
 ### 1.5 Location Parsing
-- **Split `rack_location`** into structured components: `US-EVI01.DH1.R64.RU34` → `{locode: "US-EVI01", data_hall: "DH1", rack: "R64", ru: "34"}`. Display as a clean table row instead of raw string.
+- **Split `rack_location`** into structured components: `US-SITE01.DH1.R64.RU34` → `{locode: "US-SITE01", data_hall: "DH1", rack: "R64", ru: "34"}`. Display as a clean table row instead of raw string.
 - **Dual-homing hints** — Identify A-side/B-side from NetBox interface connections. Show which TOR switches the node connects to and flag mismatches.
 
 ### 1.5 Polish
@@ -145,7 +145,7 @@ The existing `_print_help()` already explains menu options 1-9 and hotkeys. Add 
 
 ```text
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    Quick Guide — CoreWeave DCT Node Helper
+    Quick Guide — your organization DCT Node Helper
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   🟢 Brand new? Press [n] for the beginner walkthrough.
@@ -160,10 +160,10 @@ Pressing `[n]` inside the help screen shows a **Noobie Guide** that explains DCT
 - **What is an HO ticket?** — Hardware Operations tickets, similar but different team/workflow.
 - **What is a service tag?** — The physical label on the server (e.g. `S948338X5A04781`). It's the hardware serial number — the most reliable way to identify a node.
 - **What is a hostname?** — The k8s node name (e.g. `d0001142`). Software identity. Can change if the node is reimaged.
-- **What is NetBox?** — CoreWeave's source of truth for physical infrastructure: what's in each rack, how it's cabled, what switches it connects to.
+- **What is NetBox?** — your organization's source of truth for physical infrastructure: what's in each rack, how it's cabled, what switches it connects to.
 - **What is Grafana?** — Monitoring dashboards. Shows CPU temp, GPU health, network link status. Use it to check if a node is actually down or just flapping.
 - **What is IB (InfiniBand)?** — High-speed interconnect for GPU clusters. IB dashboard shows link health between nodes.
-- **What is a rack location?** — Format: `US-EVI01.DH1.R64.RU34` = site.data-hall.rack.rack-unit. Tells you exactly where to walk.
+- **What is a rack location?** — Format: `US-SITE01.DH1.R64.RU34` = site.data-hall.rack.rack-unit. Tells you exactly where to walk.
 - **Typical workflow** — Start shift → browse queue (option 3) → pick a ticket → read the detail → walk to the rack → do the work → update the ticket.
 
 **Implementation:** Add `_print_noobie_guide()` function. Call it from within `_print_help()` when user presses `[n]`. Page through with ENTER, return to help screen when done.
@@ -291,7 +291,7 @@ Build a standalone HTML documentation site that visually explains the app. Ship 
 Turn the working prototype into something you'd put on a resume and other DCTs can install.
 
 ### 2.1 Repository Setup
-- **Private GitHub repo** in the CoreWeave org (or personal GitHub if org access isn't available yet).
+- **Private GitHub repo** in the your organization org (or personal GitHub if org access isn't available yet).
 - **README.md** with:
   - One-paragraph description
   - Screenshot/recording of the main flows (menu → queue → detail → Grafana)
@@ -299,7 +299,7 @@ Turn the working prototype into something you'd put on a resume and other DCTs c
   - Configuration (`.env` setup)
   - Example commands
   - Comparison table: "How this differs from Sheriff / DCT Command Portal / cw-fleet-tools"
-- **LICENSE** — MIT or Apache 2.0 (check CoreWeave policy for internal tools).
+- **LICENSE** — MIT or Apache 2.0 (check your organization policy for internal tools).
 - **requirements.txt** — Pin `requests` version.
 
 ### 2.2 Modular Refactor
@@ -337,18 +337,18 @@ cw-node-helper/
 Replace hardcoded defaults with a `config.yaml`:
 ```yaml
 defaults:
-  site: US-CENTRAL-07A
+  site: US-SITE-01A
   project: DO
   poll_interval: 300      # seconds
   queue_limit: 20
 
 grafana:
-  base_url: https://grafana.int.coreweave.com
-  node_dashboard: ddbdicm9sw7c5x
-  ib_dashboard: HguJfdNDR
+  base_url: https://grafana.int.example.com
+  node_dashboard: your-node-dashboard-uid
+  ib_dashboard: your-ib-dashboard-uid
 
 sites:
-  - US-CENTRAL-07A
+  - US-SITE-01A
   - US-EAST-03
   - US-EAST-03A
   - US-PHX01
@@ -361,7 +361,7 @@ Start small — 5-10 tests that cover the pure logic (no API calls):
 - `test_extract_custom_fields()` — given a mock Jira fields dict, confirm service tag / hostname / site extraction.
 - `test_unwrap_field()` — single-element lists unwrap, empty lists return None, strings pass through.
 - `test_build_grafana_urls()` — correct fallback chain (node_name → netbox → hostname → service_tag).
-- `test_location_parser()` — "US-EVI01.DH1.R64.RU34" splits correctly.
+- `test_location_parser()` — "US-SITE01.DH1.R64.RU34" splits correctly.
 - `test_status_color()` — "Closed" → green, "In Progress" → yellow, etc.
 - `test_queue_jql_builder()` — site + status + mine_only produces correct JQL string.
 
@@ -376,7 +376,7 @@ python3 ~/Documents/Random/cw-node-helper/get_node_context.py
 pip install -e .
 cwhelper                   # interactive menu
 cwhelper DO-12345          # one-shot lookup
-cwhelper queue --site US-CENTRAL-07A --json
+cwhelper queue --site US-SITE-01A --json
 ```
 Use `pyproject.toml` with a `[project.scripts]` entry point.
 
@@ -413,7 +413,7 @@ ENTRYPOINT ["python3", "-m", "cwhelper"]
 These are stretch goals that significantly increase the tool's value.
 
 ### 4.1 Grafana API (Metrics + Live IB Status)
-- **Requires a Grafana API token** — generate at `https://grafana.int.coreweave.com/org/apikeys` (Viewer role)
+- **Requires a Grafana API token** — generate at `https://grafana.int.example.com/org/apikeys` (Viewer role)
   - Add `GRAFANA_API_URL` and `GRAFANA_API_TOKEN` to `.env`
 - Pull actual node metrics via Grafana `/api/ds/query`:
   - CPU temp, power draw, link status
@@ -473,7 +473,7 @@ console = Console()
 kv = Table(box=box.SIMPLE, show_header=False, pad_edge=False)
 kv.add_column("Key", style="bold", no_wrap=True)
 kv.add_column("Value", overflow="fold")
-kv.add_row("Site", "US-CENTRAL-07A")
+kv.add_row("Site", "US-SITE-01A")
 kv.add_row("Service Tag", "S948338X5A04781")
 console.print(Panel(kv, title="DO-88653 - On Hold", subtitle="Assignee: Romeo Patino"))
 ```

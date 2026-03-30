@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 # ---------------------------------------------------------------------------
 # Patch environment and heavy imports BEFORE importing the module
 # ---------------------------------------------------------------------------
-os.environ.setdefault("JIRA_EMAIL", "test.user@coreweave.com")
+os.environ.setdefault("JIRA_EMAIL", "test.user@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "fake-token")
 
 # Mock requests so the module-level `requests.Session()` doesn't do real HTTP
@@ -94,8 +94,8 @@ class TestActionPanelButtons(unittest.TestCase):
 
     def test_full_ctx_shows_all_view_buttons(self):
         ctx = _base_ticket_ctx(
-            rack_location="US-EVI01.DH1.R64.RU34",
-            netbox={"interfaces": [{"name": "eth0"}], "device_id": 1, "device_name": "d001", "site_slug": "us-evi01", "rack_id": 42},
+            rack_location="US-SITE01.DH1.R64.RU34",
+            netbox={"interfaces": [{"name": "eth0"}], "device_id": 1, "device_name": "d001", "site_slug": "us-site01", "rack_id": 42},
             description_text="Some description",
             linked_issues=[{"key": "HO-111"}],
             diag_links=[{"url": "https://example.com"}],
@@ -103,7 +103,7 @@ class TestActionPanelButtons(unittest.TestCase):
             sla={"ongoing": True},
             ho_context={"key": "HO-222"},
             grafana={"node_details": "https://grafana/d/1", "ib_node_search": "https://grafana/d/2"},
-            _portal_url="https://portal.coreweave.com/x",
+            _portal_url="https://portal.example.com/x",
         )
         out = _capture_panel(ctx)
         self._has(out, "r", "n", "w", "l", "d", "c", "e", "u")
@@ -330,11 +330,11 @@ class TestDetailViewRouting(unittest.TestCase):
             self.assertIn("DO-99999", wb.call_args[0][0])
 
     def test_r_with_rack_calls_map(self):
-        ctx = _base_ticket_ctx(rack_location="US-EVI01.DH1.R64.RU34")
+        ctx = _base_ticket_ctx(rack_location="US-SITE01.DH1.R64.RU34")
         with patch.object(_actions, "_draw_mini_dh_map") as dm:
             # 'r' draws map and waits for input, then loop; 'b' exits
             self._run_prompt(["r", "", "b"], ctx=ctx)
-            dm.assert_called_once_with("US-EVI01.DH1.R64.RU34")
+            dm.assert_called_once_with("US-SITE01.DH1.R64.RU34")
 
     def test_c_toggles_comments(self):
         ctx = _base_ticket_ctx(comments=[{"author": "A", "body": "x", "created": "2024-01-01"}])
@@ -409,7 +409,7 @@ class TestIsMine(unittest.TestCase):
 
     def test_matches_email_derived_name(self):
         self._set_identity()
-        with patch.dict(os.environ, {"JIRA_EMAIL": "john.smith@coreweave.com"}):
+        with patch.dict(os.environ, {"JIRA_EMAIL": "john.smith@example.com"}):
             self.assertTrue(gnc._is_mine({"assignee": "John Smith"}))
 
     def test_false_when_unassigned(self):
@@ -445,14 +445,14 @@ class TestParseRackLocation(unittest.TestCase):
     """Verify _parse_rack_location parses correctly."""
 
     def test_full_location(self):
-        r = gnc._parse_rack_location("US-EVI01.DH1.R64.RU34")
-        self.assertEqual(r["site_code"], "US-EVI01")
+        r = gnc._parse_rack_location("US-SITE01.DH1.R64.RU34")
+        self.assertEqual(r["site_code"], "US-SITE01")
         self.assertEqual(r["dh"], "DH1")
         self.assertEqual(r["rack"], 64)
         self.assertEqual(r["ru"], "34")
 
     def test_no_ru(self):
-        r = gnc._parse_rack_location("US-EVI01.DH1.R64")
+        r = gnc._parse_rack_location("US-SITE01.DH1.R64")
         self.assertEqual(r["rack"], 64)
         self.assertIsNone(r["ru"])
 
@@ -614,9 +614,9 @@ class TestPhysicalNeighbors(unittest.TestCase):
 
 
 class TestPhysicalNeighborsNonSerpentine(unittest.TestCase):
-    """Verify _get_physical_neighbors for Caledonia SEC1 (3 columns, non-serpentine)."""
+    """Verify _get_physical_neighbors for HALL-A (3 columns, non-serpentine)."""
 
-    SEC1 = {
+    HALL_A = {
         "racks_per_row": 10,
         "columns": [
             {"label": "A", "start": 1, "num_rows": 5},
@@ -627,56 +627,56 @@ class TestPhysicalNeighborsNonSerpentine(unittest.TestCase):
     }
 
     def test_col_a_middle(self):
-        r = gnc._get_physical_neighbors(5, self.SEC1)
+        r = gnc._get_physical_neighbors(5, self.HALL_A)
         self.assertEqual(r["left"], 4)
         self.assertEqual(r["right"], 6)
 
     def test_col_a_first(self):
-        r = gnc._get_physical_neighbors(1, self.SEC1)
+        r = gnc._get_physical_neighbors(1, self.HALL_A)
         self.assertIsNone(r["left"])
         self.assertEqual(r["right"], 2)
 
     def test_col_a_last_in_row(self):
-        r = gnc._get_physical_neighbors(10, self.SEC1)
+        r = gnc._get_physical_neighbors(10, self.HALL_A)
         self.assertEqual(r["left"], 9)
         self.assertIsNone(r["right"])
 
     def test_col_a_end(self):
-        r = gnc._get_physical_neighbors(50, self.SEC1)
+        r = gnc._get_physical_neighbors(50, self.HALL_A)
         self.assertEqual(r["left"], 49)
         self.assertIsNone(r["right"])
 
     def test_col_b_first(self):
-        r = gnc._get_physical_neighbors(51, self.SEC1)
+        r = gnc._get_physical_neighbors(51, self.HALL_A)
         self.assertIsNone(r["left"])
         self.assertEqual(r["right"], 52)
 
     def test_col_b_middle(self):
-        r = gnc._get_physical_neighbors(75, self.SEC1)
+        r = gnc._get_physical_neighbors(75, self.HALL_A)
         self.assertEqual(r["left"], 74)
         self.assertEqual(r["right"], 76)
 
     def test_col_c_first(self):
-        r = gnc._get_physical_neighbors(101, self.SEC1)
+        r = gnc._get_physical_neighbors(101, self.HALL_A)
         self.assertIsNone(r["left"])
         self.assertEqual(r["right"], 102)
 
     def test_col_c_last(self):
-        r = gnc._get_physical_neighbors(150, self.SEC1)
+        r = gnc._get_physical_neighbors(150, self.HALL_A)
         self.assertEqual(r["left"], 149)
         self.assertIsNone(r["right"])
 
     def test_no_cross_column_neighbors(self):
         """R50 (end of A) and R51 (start of B) are NOT neighbors."""
-        r50 = gnc._get_physical_neighbors(50, self.SEC1)
-        r51 = gnc._get_physical_neighbors(51, self.SEC1)
+        r50 = gnc._get_physical_neighbors(50, self.HALL_A)
+        r51 = gnc._get_physical_neighbors(51, self.HALL_A)
         self.assertIsNone(r50["right"])
         self.assertIsNone(r51["left"])
 
     def test_non_serpentine_no_reversal(self):
         """Row 1 (odd) should NOT be reversed when serpentine=False."""
         # R15 is in row 1, pos 4 — neighbors are 14 and 16 (no reversal)
-        r = gnc._get_physical_neighbors(15, self.SEC1)
+        r = gnc._get_physical_neighbors(15, self.HALL_A)
         self.assertEqual(r["left"], 14)
         self.assertEqual(r["right"], 16)
 
@@ -930,7 +930,7 @@ class TestWalkthroughMode(unittest.TestCase):
         state = {"walkthrough_notes": [], "walkthrough_session": None}
         notes = [{"rack": "R064", "ru": 34, "device_name": "node-01",
                   "status": "Active", "note": "test", "timestamp": "2026-01-01T00:00:00Z"}]
-        session = {"site_code": "US-CENTRAL-07A", "dh": "DH1", "started_at": "2026-01-01T00:00:00Z"}
+        session = {"site_code": "US-SITE-01A", "dh": "DH1", "started_at": "2026-01-01T00:00:00Z"}
         with patch.object(_actions, "_save_user_state"):
             gnc._walkthrough_save_notes(state, notes, session)
         self.assertEqual(state["walkthrough_notes"], notes)
@@ -991,8 +991,8 @@ class TestExtractPsuInfo(unittest.TestCase):
     """Tests for _extract_psu_info — PSU detail parsing from description text."""
 
     SAMPLE_DESC = (
-        "The PSU with id 3 at dh1-r306-node-04-us-central-07a has failed or is unseated.\n"
-        "Identify the PSU with id 3 at deviceslot dh1-r306-node-04-us-central-07a, "
+        "The PSU with id 3 at dh1-r306-node-04-us-site-01a has failed or is unseated.\n"
+        "Identify the PSU with id 3 at deviceslot dh1-r306-node-04-us-site-01a, "
         "serial S948338X5830183, rack unit 22, row 31."
     )
 
@@ -1003,7 +1003,7 @@ class TestExtractPsuInfo(unittest.TestCase):
 
     def test_deviceslot_extracted(self):
         info = gnc._extract_psu_info(self.SAMPLE_DESC)
-        self.assertEqual(info["deviceslot"], "dh1-r306-node-04-us-central-07a")
+        self.assertEqual(info["deviceslot"], "dh1-r306-node-04-us-site-01a")
 
     def test_serial_extracted(self):
         info = gnc._extract_psu_info(self.SAMPLE_DESC)
@@ -1051,19 +1051,19 @@ class TestPrewalkBrief(unittest.TestCase):
     def test_filters_to_current_dh(self, mock_jql):
         """Only tickets matching the current DH are shown."""
         mock_jql.return_value = [
-            self._make_issue("DO-001", "US-EVI01.DH1.R042.RU03"),   # DH1 — should show
-            self._make_issue("DO-002", "US-EVI01.DH2.R010.RU01"),   # DH2 — should be filtered
-            self._make_issue("DO-003", "US-EVI01.DH1.R064.RU14"),   # DH1 — should show
+            self._make_issue("DO-001", "US-SITE01.DH1.R042.RU03"),   # DH1 — should show
+            self._make_issue("DO-002", "US-SITE01.DH2.R010.RU01"),   # DH2 — should be filtered
+            self._make_issue("DO-003", "US-SITE01.DH1.R064.RU14"),   # DH1 — should show
         ]
         with patch("builtins.print"):
-            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+            gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "user@cw.com", "token")
         mock_jql.assert_called_once()
 
     @patch("cwhelper.services.walkthrough._jql_search")
     def test_skips_when_no_credentials(self, mock_jql):
         """No Jira call is made when email or token is missing."""
-        gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "", "token")
-        gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "")
+        gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "", "token")
+        gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "user@cw.com", "")
         mock_jql.assert_not_called()
 
     @patch("cwhelper.services.walkthrough._jql_search")
@@ -1071,26 +1071,26 @@ class TestPrewalkBrief(unittest.TestCase):
         """No crash or output when Jira returns no tickets."""
         mock_jql.return_value = []
         with patch("builtins.print"):
-            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+            gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "user@cw.com", "token")
 
     @patch("cwhelper.services.walkthrough._jql_search")
     def test_handles_jira_exception(self, mock_jql):
         """Gracefully degrades when Jira raises an exception."""
         mock_jql.side_effect = Exception("network error")
         with patch("builtins.print"):
-            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+            gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "user@cw.com", "token")
 
     @patch("cwhelper.services.walkthrough._jql_search")
     def test_sorts_by_rack_number(self, mock_jql):
         """Rows are sorted by rack number ascending."""
         mock_jql.return_value = [
-            self._make_issue("DO-010", "US-EVI01.DH1.R100.RU01"),
-            self._make_issue("DO-002", "US-EVI01.DH1.R005.RU01"),
-            self._make_issue("DO-007", "US-EVI01.DH1.R042.RU01"),
+            self._make_issue("DO-010", "US-SITE01.DH1.R100.RU01"),
+            self._make_issue("DO-002", "US-SITE01.DH1.R005.RU01"),
+            self._make_issue("DO-007", "US-SITE01.DH1.R042.RU01"),
         ]
         printed = []
         with patch("builtins.print", side_effect=lambda *a, **k: printed.append(str(a))):
-            gnc._walkthrough_prewalk_brief("US-EVI01", "DH1", "user@cw.com", "token")
+            gnc._walkthrough_prewalk_brief("US-SITE01", "DH1", "user@cw.com", "token")
         # R005 should appear before R042 and R100 in output
         rack_lines = [l for l in printed if "R005" in l or "R042" in l or "R100" in l]
         self.assertTrue(len(rack_lines) >= 3)
@@ -1168,7 +1168,7 @@ class TestRadarUrgencyRank(unittest.TestCase):
 class TestFetchRadarQueue(unittest.TestCase):
     """Tests for _fetch_radar_queue with mocked Jira."""
 
-    def _make_ho(self, key, status, rack_loc="US-EVI01.DH1.R064.RU22"):
+    def _make_ho(self, key, status, rack_loc="US-SITE01.DH1.R064.RU22"):
         return {
             "key": key,
             "fields": {
@@ -1177,7 +1177,7 @@ class TestFetchRadarQueue(unittest.TestCase):
                 "customfield_10207": rack_loc,
                 "customfield_10193": "10NQ724",
                 "customfield_10192": "d0001142",
-                "customfield_10194": "US-CENTRAL-07A",
+                "customfield_10194": "US-SITE-01A",
                 "assignee": None,
                 "created": "2026-03-01T00:00:00.000+0000",
                 "updated": "2026-03-10T00:00:00.000+0000",
@@ -1189,11 +1189,11 @@ class TestFetchRadarQueue(unittest.TestCase):
     @patch("cwhelper.services.radar._search_queue")
     def test_returns_sorted_by_urgency(self, mock_sq):
         mock_sq.return_value = [
-            self._make_ho("HO-100", "Awaiting Parts", "US-EVI01.DH1.R010.RU01"),
-            self._make_ho("HO-200", "Sent to DCT RC", "US-EVI01.DH1.R020.RU01"),
-            self._make_ho("HO-300", "RMA-initiate", "US-EVI01.DH1.R030.RU01"),
+            self._make_ho("HO-100", "Awaiting Parts", "US-SITE01.DH1.R010.RU01"),
+            self._make_ho("HO-200", "Sent to DCT RC", "US-SITE01.DH1.R020.RU01"),
+            self._make_ho("HO-300", "RMA-initiate", "US-SITE01.DH1.R030.RU01"),
         ]
-        result = _radar._fetch_radar_queue("e", "t", site="US-EVI01")
+        result = _radar._fetch_radar_queue("e", "t", site="US-SITE01")
         keys = [r["key"] for r in result]
         # Imminent (RC) first, then soon (RMA), then eventual (Parts)
         self.assertEqual(keys, ["HO-200", "HO-300", "HO-100"])
@@ -1201,8 +1201,8 @@ class TestFetchRadarQueue(unittest.TestCase):
     @patch("cwhelper.services.radar._search_queue")
     def test_same_urgency_sorted_by_rack(self, mock_sq):
         mock_sq.return_value = [
-            self._make_ho("HO-100", "Sent to DCT UC", "US-EVI01.DH1.R100.RU01"),
-            self._make_ho("HO-200", "Sent to DCT RC", "US-EVI01.DH1.R010.RU01"),
+            self._make_ho("HO-100", "Sent to DCT UC", "US-SITE01.DH1.R100.RU01"),
+            self._make_ho("HO-200", "Sent to DCT RC", "US-SITE01.DH1.R010.RU01"),
         ]
         result = _radar._fetch_radar_queue("e", "t")
         keys = [r["key"] for r in result]
@@ -1218,9 +1218,9 @@ class TestFetchRadarQueue(unittest.TestCase):
     @patch("cwhelper.services.radar._search_queue")
     def test_calls_search_with_radar_filter(self, mock_sq):
         mock_sq.return_value = []
-        _radar._fetch_radar_queue("email", "token", site="US-EVI01")
+        _radar._fetch_radar_queue("email", "token", site="US-SITE01")
         mock_sq.assert_called_once_with(
-            "US-EVI01", "email", "token",
+            "US-SITE01", "email", "token",
             limit=50, status_filter="radar", project="HO", use_cache=False,
         )
 
@@ -1228,7 +1228,7 @@ class TestFetchRadarQueue(unittest.TestCase):
 class TestRadarSummaryLine(unittest.TestCase):
     """Tests for _radar_summary_line."""
 
-    def _make_ho(self, key, status, rack="US-EVI01.DH1.R064.RU22"):
+    def _make_ho(self, key, status, rack="US-SITE01.DH1.R064.RU22"):
         return {
             "key": key,
             "fields": {
@@ -1253,8 +1253,8 @@ class TestRadarSummaryLine(unittest.TestCase):
 
     def test_hottest_area(self):
         issues = [
-            self._make_ho("HO-1", "Sent to DCT RC", "US-EVI01.DH1.R064.RU01"),
-            self._make_ho("HO-2", "Sent to DCT UC", "US-EVI01.DH1.R065.RU01"),
+            self._make_ho("HO-1", "Sent to DCT RC", "US-SITE01.DH1.R064.RU01"),
+            self._make_ho("HO-2", "Sent to DCT UC", "US-SITE01.DH1.R065.RU01"),
         ]
         line = _strip_ansi(_radar._radar_summary_line(issues))
         self.assertIn("R60-R69", line)
@@ -1269,7 +1269,7 @@ class TestBuildPrepBrief(unittest.TestCase):
             "fields": {
                 "summary": summary,
                 "status": {"name": status},
-                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                "customfield_10207": "US-SITE01.DH1.R064.RU22",
                 "customfield_10193": "10NQ724",
                 "customfield_10192": "d0001142",
             },
@@ -1333,7 +1333,7 @@ class TestCheckRadarLink(unittest.TestCase):
                 "summary": "Recable node",
                 "status": {"name": "Open"},
                 "customfield_10193": "10NQ724",
-                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                "customfield_10207": "US-SITE01.DH1.R064.RU22",
             },
         }
 
@@ -1344,7 +1344,7 @@ class TestCheckRadarLink(unittest.TestCase):
                 "key": "HO-23456",
                 "fields": {
                     "status": {"name": "Sent to DCT RC"},
-                    "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                    "customfield_10207": "US-SITE01.DH1.R064.RU22",
                 },
             },
         }
@@ -1397,7 +1397,7 @@ class TestShowGrabCardRadar(unittest.TestCase):
                 "summary": "Recable node for onboarding",
                 "status": {"name": "Open"},
                 "customfield_10193": "10NQ724",
-                "customfield_10207": "US-EVI01.DH1.R064.RU22",
+                "customfield_10207": "US-SITE01.DH1.R064.RU22",
                 "assignee": None,
             },
         }

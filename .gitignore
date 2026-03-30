@@ -16,6 +16,7 @@ build/
 # App state (user-specific, not shareable)
 .cwhelper_state.json
 .cwhelper_session.json
+.ibtrace_cache.json
 .devhub.json
 bookmark_*.json
 dh_layouts.json
@@ -38,3 +39,21 @@ source/
 state.db
 reports/
 data/
+
+# Infrastructure data (sensitive — not for public repos)
+ib_topology.json
+.ib_sketch_cache.json
+bookmarks_export.md
+Terminal Saved Output*
+assembly-last-step-explode*
+
+# Bookmark/profile utility scripts (contain org-specific data)
+check_bookmarks.py
+describe_bookmarks.py
+export_embedded.py
+organize_bookmarks.py
+organize_profile1.py
+purge_dead.py
+
+# Backup copies
+cwhelper_backup_*/

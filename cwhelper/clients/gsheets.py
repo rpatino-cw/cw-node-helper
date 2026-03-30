@@ -1,4 +1,4 @@
-"""RMA tracker — reads the EVI01 Device Tracker xlsx from ~/Downloads.
+"""RMA tracker — reads the Device Tracker xlsx from ~/Downloads.
 
 Workflow: Download the sheet → walkthrough auto-finds it in Downloads → reads it → deletes it.
 No GCP, no auth, no API keys, no manual file moving.
@@ -131,10 +131,10 @@ def _find_latest_file() -> str | None:
     Handles duplicates: "name (1).xlsx", "name (2).csv", etc.
     """
     patterns = [
-        "EVI01-Device-Tracker*.xlsx",
-        "EVI01-Device-Tracker*.csv",
-        "EVI01*Device*Tracker*.xlsx",
-        "EVI01*Device*Tracker*.csv",
+        "Device-Tracker*.xlsx",
+        "Device-Tracker*.csv",
+        "*Device*Tracker*.xlsx",
+        "*Device*Tracker*.csv",
         "*Device-Tracker*.xlsx",
         "*Device-Tracker*.csv",
         "*Device*Tracker*.xlsx",

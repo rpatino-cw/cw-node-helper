@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#08080a">
+<title>Rack Map — CW Node Helper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:        #08080a;
+  --bg-raised: #0f1014;
+  --surface:   #1a1b24;
+  --border:    #222330;
+  --border-lt: #2a2b3a;
+  --text:      #c8c9d4;
+  --text-dim:  #6b6d80;
+  --text-mute: #44465a;
+  --accent:    #d4943a;
+  --accent-lt: #e8b86a;
+  --accent-dk: #8a5e1e;
+  --ansi-red:     #e06c75;
+  --ansi-green:   #98c379;
+  --ansi-yellow:  #e5c07b;
+  --ansi-blue:    #61afef;
+  --ansi-magenta: #c678dd;
+  --ansi-cyan:    #56b6c2;
+  --ansi-white:   #dcdfe4;
+  --ansi-dim:     #636578;
+  --bg-terminal:        #0c0d12;
+  --bg-terminal-chrome: #16171e;
+  --font-body: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* CRT scanline overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ---------- LAYOUT ---------- */
+.app {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  gap: 0;
+}
+
+/* ---------- HEADER ---------- */
+.header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.header h1 {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ansi-white);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.header h1 span { color: var(--accent); }
+
+.site-select {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.site-select:focus { border-color: var(--accent); }
+.site-select option { background: var(--surface); }
+
+.header-info {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.header-back {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--accent-lt);
+  text-decoration: none;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+.header-back:hover { opacity: 1; }
+
+/* ---------- FLOOR PLAN ---------- */
+.floor-plan {
+  position: relative;
+  overflow: auto;
+  padding: 1.5rem;
+  background: var(--bg);
+}
+
+.floor-plan-inner {
+  position: relative;
+  display: inline-block;
+  min-width: 100%;
+}
+
+.dh-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.5rem;
+}
+
+.column-group {
+  margin-bottom: 2rem;
+}
+
+.column-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-bottom: 0.35rem;
+  letter-spacing: 0.05em;
+}
+
+.rack-grid {
+  display: inline-grid;
+  gap: 2px;
+}
+
+.rack-cell {
+  width: 28px;
+  height: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mute);
+}
+
+.rack-cell:hover {
+  background: var(--border-lt);
+  border-color: var(--accent-dk);
+  color: var(--text-dim);
+  z-index: 2;
+}
+
+.rack-cell.selected {
+  background: var(--accent-dk);
+  border-color: var(--accent);
+  color: var(--ansi-white);
+  box-shadow: 0 0 8px rgba(212, 148, 58, 0.3);
+  z-index: 3;
+}
+
+.rack-cell.peer-highlight {
+  background: rgba(86, 182, 194, 0.25);
+  border-color: var(--ansi-cyan);
+  color: var(--ansi-cyan);
+  z-index: 3;
+  animation: peer-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes peer-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(86, 182, 194, 0.3); }
+  50% { box-shadow: 0 0 12px rgba(86, 182, 194, 0.6); }
+}
+
+.rack-cell.connection-source {
+  background: rgba(97, 175, 239, 0.3);
+  border-color: var(--ansi-blue);
+  color: var(--ansi-blue);
+  z-index: 3;
+}
+
+/* Aisle separator */
+.aisle-gap {
+  height: 6px;
+}
+
+/* ---------- SVG OVERLAY for connection lines ---------- */
+.connection-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  overflow: visible;
+}
+
+.connection-line {
+  stroke: var(--ansi-cyan);
+  stroke-width: 2;
+  fill: none;
+  opacity: 0;
+  transition: opacity 0.4s var(--ease-out);
+  filter: drop-shadow(0 0 4px rgba(86, 182, 194, 0.5));
+}
+
+.connection-line.active {
+  opacity: 0.8;
+}
+
+.connection-line-glow {
+  stroke: var(--ansi-cyan);
+  stroke-width: 6;
+  fill: none;
+  opacity: 0;
+  transition: opacity 0.4s var(--ease-out);
+  filter: blur(3px);
+}
+
+.connection-line-glow.active {
+  opacity: 0.2;
+}
+
+/* Animated dash along connection line */
+.connection-line-animated {
+  stroke: var(--ansi-cyan);
+  stroke-width: 2;
+  fill: none;
+  stroke-dasharray: 8 12;
+  opacity: 0;
+  transition: opacity 0.4s var(--ease-out);
+}
+
+.connection-line-animated.active {
+  opacity: 0.6;
+  animation: dash-flow 1s linear infinite;
+}
+
+@keyframes dash-flow {
+  to { stroke-dashoffset: -20; }
+}
+
+/* ---------- SIDEBAR ---------- */
+.sidebar {
+  background: var(--bg-raised);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+}
+
+.sidebar-empty-text {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-mute);
+  line-height: 1.8;
+}
+
+.sidebar-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-terminal-chrome);
+}
+
+.sidebar-header h2 {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ansi-white);
+}
+
+.sidebar-header .rack-meta {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+/* ---------- RACK ELEVATION IN SIDEBAR ---------- */
+.rack-elevation {
+  padding: 0.75rem 1.25rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.elevation-frame {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.elevation-row {
+  display: flex;
+  align-items: stretch;
+  min-height: 14px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.elevation-row:first-child {
+  border-top: 1px solid var(--border);
+  border-radius: 3px 3px 0 0;
+}
+
+.elevation-row:last-child {
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 0 3px 3px;
+}
+
+.elevation-ru {
+  width: 30px;
+  text-align: right;
+  padding: 1px 4px;
+  color: var(--text-mute);
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.elevation-slot {
+  flex: 1;
+  padding: 1px 6px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.elevation-row.occupied .elevation-slot {
+  background: rgba(26, 27, 36, 0.6);
+  color: var(--text);
+}
+
+.elevation-row.empty .elevation-slot {
+  color: var(--text-mute);
+}
+
+.elevation-row.device-top .elevation-slot {
+  border-top: 1px solid var(--border-lt);
+}
+
+.elevation-row.highlighted {
+  background: rgba(212, 148, 58, 0.15);
+}
+
+.elevation-row.highlighted .elevation-ru {
+  color: var(--accent);
+}
+
+.elevation-row.highlighted .elevation-slot {
+  color: var(--accent-lt);
+}
+
+.device-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.device-continuation {
+  color: var(--text-mute);
+}
+
+/* ---------- CONNECTION LIST ---------- */
+.connections-section {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem 1.25rem;
+}
+
+.connections-title {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.5rem;
+}
+
+.connection-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.connection-item:hover {
+  background: var(--surface);
+}
+
+.connection-item.active {
+  background: rgba(86, 182, 194, 0.12);
+  outline: 1px solid rgba(86, 182, 194, 0.3);
+}
+
+.conn-port {
+  color: var(--ansi-cyan);
+  font-weight: 600;
+  min-width: 36px;
+}
+
+.conn-arrow {
+  color: var(--text-mute);
+}
+
+.conn-peer {
+  color: var(--text);
+}
+
+.conn-peer-rack {
+  color: var(--accent-lt);
+  font-weight: 600;
+}
+
+.conn-peer-port {
+  color: var(--text-dim);
+}
+
+/* ---------- NODE LIST in sidebar ---------- */
+.node-list {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem;
+}
+
+.node-list-title {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.5rem;
+}
+
+.node-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.node-item:hover { background: var(--surface); }
+.node-item.active { background: rgba(212, 148, 58, 0.12); outline: 1px solid rgba(212, 148, 58, 0.3); }
+
+.node-pos { color: var(--text-mute); min-width: 20px; text-align: right; }
+.node-name { color: var(--text); }
+.node-conns { color: var(--text-dim); margin-left: auto; font-size: 0.6rem; }
+
+/* ---------- TOOLTIP ---------- */
+.tooltip {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border-lt);
+  border-radius: 6px;
+  padding: 0.4rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  white-space: nowrap;
+}
+
+.tooltip.visible { opacity: 1; }
+
+/* ---------- LEGEND ---------- */
+.legend {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 0.5rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  grid-column: 1 / -1;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend-swatch {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid;
+}
+
+.legend-swatch.selected { background: var(--accent-dk); border-color: var(--accent); }
+.legend-swatch.peer { background: rgba(86, 182, 194, 0.25); border-color: var(--ansi-cyan); }
+.legend-swatch.empty { background: var(--surface); border-color: var(--border); }
+
+/* ---------- KEYBOARD HINT ---------- */
+.kbd-hint {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-mute);
+  margin-left: auto;
+}
+
+kbd {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- HEADER -->
+  <div class="header">
+    <a href="index.html" class="header-back">&larr; site</a>
+    <h1>rack<span>:</span>map</h1>
+    <select id="siteSelect" class="site-select"></select>
+    <span id="headerInfo" class="header-info"></span>
+  </div>
+
+  <!-- FLOOR PLAN -->
+  <div class="floor-plan" id="floorPlan">
+    <div class="floor-plan-inner" id="floorPlanInner">
+      <svg class="connection-svg" id="connectionSvg"></svg>
+      <!-- columns rendered here -->
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-empty">
+      <div class="sidebar-empty-text">
+        Select a rack on the<br>floor plan to inspect<br><br>
+        <span style="color: var(--accent);">Click</span> rack &rarr; view connections<br>
+        <span style="color: var(--ansi-cyan);">Click</span> connection &rarr; trace to peer
+      </div>
+    </div>
+  </div>
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-swatch selected"></div>Selected rack</div>
+    <div class="legend-item"><div class="legend-swatch peer"></div>Peer rack (IB)</div>
+    <div class="legend-item"><div class="legend-swatch empty"></div>Empty</div>
+    <div class="kbd-hint"><kbd>Esc</kbd> clear &nbsp; <kbd>Click</kbd> rack &nbsp; <kbd>Click</kbd> connection to trace</div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ========================================================================
+//  DATA
+// ========================================================================
+let dhLayouts = {};
+let ibTopology = {};
+let currentSite = null;
+let selectedRack = null;
+let activeConnection = null;  // {port, leafRack, leafId, leafPort}
+let rackElements = {};        // rackNumber -> DOM element
+
+// ========================================================================
+//  LOAD DATA
+// ========================================================================
+async function loadData() {
+  try {
+    const [layoutRes, topoRes] = await Promise.all([
+      fetch('../dh_layouts.json'),
+      fetch('../ib_topology.json')
+    ]);
+    dhLayouts = await layoutRes.json();
+    ibTopology = await topoRes.json();
+
+    populateSiteSelect();
+  } catch (e) {
+    document.getElementById('floorPlanInner').innerHTML =
+      `<div style="padding:3rem;color:var(--ansi-red);font-family:var(--font-mono);font-size:0.8rem;">
+        Failed to load data files.<br>
+        Make sure dh_layouts.json and ib_topology.json are in the parent directory.<br>
+        <br>Error: ${e.message}
+      </div>`;
+  }
+}
+
+function populateSiteSelect() {
+  const sel = document.getElementById('siteSelect');
+  const sites = Object.keys(dhLayouts).sort();
+  sites.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    sel.appendChild(opt);
+  });
+
+  // Default to SITE01 DH1 if available
+  const evi = sites.find(s => s.includes('SITE01') || s.includes('SITE-01'));
+  if (evi) sel.value = evi;
+
+  sel.addEventListener('change', () => renderSite(sel.value));
+  if (sites.length) renderSite(sel.value);
+}
+
+// ========================================================================
+//  RENDER FLOOR PLAN
+// ========================================================================
+function renderSite(siteKey) {
+  currentSite = siteKey;
+  selectedRack = null;
+  activeConnection = null;
+  rackElements = {};
+
+  const layout = dhLayouts[siteKey];
+  if (!layout) return;
+
+  const inner = document.getElementById('floorPlanInner');
+  // Clear everything except SVG
+  const svg = document.getElementById('connectionSvg');
+  inner.innerHTML = '';
+  inner.appendChild(svg);
+  clearConnections();
+
+  const cols = layout.columns;
+  const defaultPerRow = layout.racks_per_row;
+  const serpentine = layout.serpentine !== false;
+
+  // Parse DH name from site key (e.g., "US-VO201.DH1" -> "DH1")
+  const dhName = siteKey.split('.').pop();
+
+  // Helper: get rack number at (col, row, pos)
+  function rackAt(colStart, row, pos, colPerRow) {
+    const pr = colPerRow || defaultPerRow;
+    const base = colStart + row * pr;
+    if (serpentine && row % 2 === 1) return base + (pr - 1 - pos);
+    return base + pos;
+  }
+
+  // Render each column
+  cols.forEach((col, ci) => {
+    const colPerRow = col.racks_per_row || defaultPerRow;
+    const numRows = col.num_rows;
+    const colStart = col.start;
+
+    const group = document.createElement('div');
+    group.className = 'column-group';
+
+    const label = document.createElement('div');
+    label.className = 'column-label';
+    label.textContent = `${col.label}  (R${colStart}–R${colStart + numRows * colPerRow - 1})`;
+    group.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'rack-grid';
+    grid.style.gridTemplateColumns = `repeat(${colPerRow}, 28px)`;
+
+    for (let row = numRows - 1; row >= 0; row--) {
+      // Aisle gap every 2 rows
+      if (row < numRows - 1 && row % 2 === 1) {
+        for (let p = 0; p < colPerRow; p++) {
+          const gap = document.createElement('div');
+          gap.className = 'aisle-gap';
+          grid.appendChild(gap);
+        }
+      }
+
+      for (let pos = 0; pos < colPerRow; pos++) {
+        const rackNum = rackAt(colStart, row, pos, colPerRow);
+        const cell = document.createElement('div');
+        cell.className = 'rack-cell';
+        cell.dataset.rack = rackNum;
+        cell.textContent = rackNum;
+        cell.addEventListener('click', () => selectRack(rackNum));
+        cell.addEventListener('mouseenter', (e) => showTooltip(e, `R${rackNum}`));
+        cell.addEventListener('mouseleave', hideTooltip);
+        grid.appendChild(cell);
+        rackElements[rackNum] = cell;
+      }
+    }
+
+    group.appendChild(grid);
+    inner.appendChild(group);
+  });
+
+  // Update header info
+  const totalRacks = layout.total_racks || cols.reduce((s, c) => s + (c.num_rows * (c.racks_per_row || defaultPerRow)), 0);
+  document.getElementById('headerInfo').textContent =
+    `${totalRacks} racks · ${cols.length} col${cols.length > 1 ? 's' : ''} · ${serpentine ? 'serpentine' : 'sequential'}`;
+
+  resetSidebar();
+}
+
+// ========================================================================
+//  SELECT RACK
+// ========================================================================
+function selectRack(rackNum) {
+  // Clear previous
+  clearHighlights();
+  clearConnections();
+  activeConnection = null;
+
+  selectedRack = rackNum;
+
+  // Highlight selected rack
+  const el = rackElements[rackNum];
+  if (el) el.classList.add('selected');
+
+  // Find IB connections for this rack
+  const dhName = currentSite ? currentSite.split('.').pop() : 'DH1';
+  const connections = findRackConnections(dhName, rackNum);
+
+  renderSidebar(rackNum, connections);
+}
+
+function findRackConnections(dh, rackNum) {
+  // IB topology keys: "DH1:rack:node_pos"
+  const prefix = `${dh}:${rackNum}:`;
+  const results = [];
+
+  for (const [key, conns] of Object.entries(ibTopology)) {
+    if (key.startsWith(prefix)) {
+      const nodePos = key.split(':')[2];
+      conns.forEach(c => {
+        results.push({
+          nodePos,
+          port: c.port,
+          leafRack: parseInt(c.leaf_rack),
+          leafId: c.leaf_id,
+          leafPort: c.leaf_port,
+        });
+      });
+    }
+  }
+
+  return results;
+}
+
+// ========================================================================
+//  SIDEBAR RENDERING
+// ========================================================================
+function resetSidebar() {
+  document.getElementById('sidebar').innerHTML = `
+    <div class="sidebar-empty">
+      <div class="sidebar-empty-text">
+        Select a rack on the<br>floor plan to inspect<br><br>
+        <span style="color: var(--accent);">Click</span> rack &rarr; view connections<br>
+        <span style="color: var(--ansi-cyan);">Click</span> connection &rarr; trace to peer
+      </div>
+    </div>`;
+}
+
+function renderSidebar(rackNum, connections) {
+  const sidebar = document.getElementById('sidebar');
+
+  // Group connections by node position
+  const byNode = {};
+  connections.forEach(c => {
+    if (!byNode[c.nodePos]) byNode[c.nodePos] = [];
+    byNode[c.nodePos].push(c);
+  });
+
+  const nodePositions = Object.keys(byNode).sort((a, b) => parseInt(a) - parseInt(b));
+
+  // Count unique peer racks
+  const peerRacks = new Set(connections.map(c => c.leafRack));
+
+  sidebar.innerHTML = `
+    <div class="sidebar-header">
+      <h2>R${rackNum}</h2>
+      <div class="rack-meta">
+        ${connections.length} IB connection${connections.length !== 1 ? 's' : ''}
+        &middot; ${peerRacks.size} peer rack${peerRacks.size !== 1 ? 's' : ''}
+        &middot; ${nodePositions.length} node${nodePositions.length !== 1 ? 's' : ''}
+      </div>
+    </div>
+
+    ${nodePositions.length ? `
+      <div class="node-list">
+        <div class="node-list-title">Nodes</div>
+        ${nodePositions.map(pos => `
+          <div class="node-item" data-node="${pos}" onclick="selectNode(${rackNum}, '${pos}')">
+            <span class="node-pos">${pos}</span>
+            <span class="node-name">Node ${pos}</span>
+            <span class="node-conns">${byNode[pos].length} ports</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    <div class="connections-section" id="connectionsSection">
+      <div class="connections-title">IB Connections${nodePositions.length > 0 ? ' — All Nodes' : ''}</div>
+      ${renderConnectionList(connections)}
+    </div>
+  `;
+}
+
+function renderConnectionList(connections) {
+  if (!connections.length) {
+    return `<div style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-mute);padding:0.5rem 0;">No IB connections found for this rack.</div>`;
+  }
+
+  // Group by peer rack for cleaner display
+  const byPeerRack = {};
+  connections.forEach(c => {
+    if (!byPeerRack[c.leafRack]) byPeerRack[c.leafRack] = [];
+    byPeerRack[c.leafRack].push(c);
+  });
+
+  const peerRacks = Object.keys(byPeerRack).sort((a, b) => parseInt(a) - parseInt(b));
+
+  return peerRacks.map(pr => `
+    <div style="margin-bottom:0.5rem;">
+      <div style="font-family:var(--font-mono);font-size:0.6rem;color:var(--accent-lt);margin:0.35rem 0 0.15rem;font-weight:600;">
+        &rarr; R${pr} <span style="color:var(--text-mute)">(${byPeerRack[pr].length} links)</span>
+      </div>
+      ${byPeerRack[pr].map(c => `
+        <div class="connection-item"
+             data-peer-rack="${c.leafRack}"
+             data-port="${c.port}"
+             data-leaf-id="${c.leafId}"
+             data-leaf-port="${c.leafPort}"
+             data-node="${c.nodePos}"
+             onclick="traceConnection(this, ${c.leafRack}, '${c.port}', '${c.leafId}', '${c.leafPort}', '${c.nodePos}')">
+          <span class="conn-port">${c.port}</span>
+          <span class="conn-arrow">&rarr;</span>
+          <span class="conn-peer">
+            <span class="conn-peer-rack">R${c.leafRack}</span>
+            <span class="conn-peer-port">leaf ${c.leafId} : ${c.leafPort}</span>
+          </span>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+function selectNode(rackNum, nodePos) {
+  // Highlight the clicked node item
+  document.querySelectorAll('.node-item').forEach(n => n.classList.remove('active'));
+  const item = document.querySelector(`.node-item[data-node="${nodePos}"]`);
+  if (item) item.classList.add('active');
+
+  // Filter connections to this node
+  const dhName = currentSite ? currentSite.split('.').pop() : 'DH1';
+  const allConns = findRackConnections(dhName, rackNum);
+  const filtered = allConns.filter(c => c.nodePos === nodePos);
+
+  const section = document.getElementById('connectionsSection');
+  section.innerHTML = `
+    <div class="connections-title">IB Connections — Node ${nodePos}</div>
+    ${renderConnectionList(filtered)}
+  `;
+
+  // Clear previous connection traces
+  clearHighlights();
+  clearConnections();
+
+  // Re-select the rack
+  const el = rackElements[rackNum];
+  if (el) el.classList.add('selected');
+
+  // Highlight all peer racks for this node
+  const peerRacks = new Set(filtered.map(c => c.leafRack));
+  peerRacks.forEach(pr => {
+    const peerEl = rackElements[pr];
+    if (peerEl && pr !== rackNum) peerEl.classList.add('peer-highlight');
+  });
+
+  // Draw connection lines to all unique peer racks
+  peerRacks.forEach(pr => {
+    if (pr !== rackNum) drawConnectionLine(rackNum, pr);
+  });
+}
+
+// ========================================================================
+//  TRACE CONNECTION (click a specific connection item)
+// ========================================================================
+function traceConnection(el, peerRack, port, leafId, leafPort, nodePos) {
+  // Toggle active state
+  const wasActive = el.classList.contains('active');
+
+  // Clear all
+  document.querySelectorAll('.connection-item').forEach(ci => ci.classList.remove('active'));
+  clearHighlights();
+  clearConnections();
+
+  // Re-select source rack
+  if (rackElements[selectedRack]) rackElements[selectedRack].classList.add('selected');
+
+  if (wasActive) {
+    activeConnection = null;
+    return;
+  }
+
+  el.classList.add('active');
+  activeConnection = { peerRack, port, leafId, leafPort, nodePos };
+
+  // Highlight peer rack
+  const peerEl = rackElements[peerRack];
+  if (peerEl) {
+    peerEl.classList.add('peer-highlight');
+    // Scroll peer into view if needed
+    peerEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  }
+
+  // Mark source as connection-source
+  if (rackElements[selectedRack]) rackElements[selectedRack].classList.add('connection-source');
+
+  // Draw SVG line
+  drawConnectionLine(selectedRack, peerRack);
+}
+
+// ========================================================================
+//  SVG CONNECTION LINES
+// ========================================================================
+function drawConnectionLine(fromRack, toRack) {
+  const fromEl = rackElements[fromRack];
+  const toEl = rackElements[toRack];
+  if (!fromEl || !toEl) return;
+
+  const svg = document.getElementById('connectionSvg');
+  const inner = document.getElementById('floorPlanInner');
+  const innerRect = inner.getBoundingClientRect();
+
+  // Get center positions relative to inner container
+  const fromRect = fromEl.getBoundingClientRect();
+  const toRect = toEl.getBoundingClientRect();
+
+  const x1 = fromRect.left + fromRect.width / 2 - innerRect.left;
+  const y1 = fromRect.top + fromRect.height / 2 - innerRect.top;
+  const x2 = toRect.left + toRect.width / 2 - innerRect.left;
+  const y2 = toRect.top + toRect.height / 2 - innerRect.top;
+
+  // Ensure SVG covers the entire area
+  svg.style.width = inner.scrollWidth + 'px';
+  svg.style.height = inner.scrollHeight + 'px';
+
+  // Glow layer
+  const glow = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  glow.setAttribute('x1', x1);
+  glow.setAttribute('y1', y1);
+  glow.setAttribute('x2', x2);
+  glow.setAttribute('y2', y2);
+  glow.classList.add('connection-line-glow');
+  svg.appendChild(glow);
+
+  // Main line
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', x1);
+  line.setAttribute('y1', y1);
+  line.setAttribute('x2', x2);
+  line.setAttribute('y2', y2);
+  line.classList.add('connection-line');
+  svg.appendChild(line);
+
+  // Animated dash overlay
+  const anim = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  anim.setAttribute('x1', x1);
+  anim.setAttribute('y1', y1);
+  anim.setAttribute('x2', x2);
+  anim.setAttribute('y2', y2);
+  anim.classList.add('connection-line-animated');
+  svg.appendChild(anim);
+
+  // Animate in
+  requestAnimationFrame(() => {
+    glow.classList.add('active');
+    line.classList.add('active');
+    anim.classList.add('active');
+  });
+}
+
+function clearConnections() {
+  const svg = document.getElementById('connectionSvg');
+  svg.innerHTML = '';
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.rack-cell').forEach(c => {
+    c.classList.remove('selected', 'peer-highlight', 'connection-source');
+  });
+}
+
+// ========================================================================
+//  TOOLTIP
+// ========================================================================
+function showTooltip(e, text) {
+  const tip = document.getElementById('tooltip');
+  tip.textContent = text;
+  tip.classList.add('visible');
+  tip.style.left = (e.clientX + 12) + 'px';
+  tip.style.top = (e.clientY - 8) + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').classList.remove('visible');
+}
+
+// ========================================================================
+//  KEYBOARD
+// ========================================================================
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    clearHighlights();
+    clearConnections();
+    resetSidebar();
+    selectedRack = null;
+    activeConnection = null;
+  }
+});
+
+// ========================================================================
+//  INIT
+// ========================================================================
+loadData();
+</script>
+</body>
+</html>

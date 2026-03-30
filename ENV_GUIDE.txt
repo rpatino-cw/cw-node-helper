@@ -36,14 +36,14 @@ Open .env in any text editor:
 
 Replace the placeholder values:
 
-  JIRA_EMAIL=your.name@coreweave.com
+  JIRA_EMAIL=your.name@example.com
   JIRA_API_TOKEN=paste_your_token_here
 
-Change "your.name@coreweave.com" to YOUR actual CoreWeave email.
+Change "your.name@example.com" to YOUR actual your organization email.
 Paste the token you copied in step 2 where it says "paste_your_token_here".
 
 Example (NOT real values):
-  JIRA_EMAIL=john.doe@coreweave.com
+  JIRA_EMAIL=john.doe@example.com
   JIRA_API_TOKEN=ATATT3xFfGF0abc123def456ghi789...
 
 
@@ -52,12 +52,12 @@ STEP 4 — NetBox token (OPTIONAL but recommended)
 NetBox enables rack views, device lookups, and cable connections.
 If you have a NetBox account:
 
-1. Go to: https://coreweave.cloud.netboxapp.com/user/api-tokens/
+1. Go to: https://netbox.example.com/user/api-tokens/
 2. Click "Add a token"
 3. Copy the token
 
 5. Add to your .env file:
-   NETBOX_API_URL=https://coreweave.cloud.netboxapp.com/api
+   NETBOX_API_URL=https://netbox.example.com/api
    NETBOX_API_TOKEN=paste_your_netbox_token_here
 
 If you don't have NetBox access, just leave these lines as-is.
@@ -100,4 +100,4 @@ SECURITY NOTES
 - Your tokens give access to YOUR Jira and NetBox accounts
 - If you think a token is compromised, revoke it immediately:
   Jira:   https://id.atlassian.com/manage-profile/security/api-tokens
-  NetBox: https://coreweave.cloud.netboxapp.com/user/api-tokens/
+  NetBox: https://netbox.example.com/user/api-tokens/

@@ -2,7 +2,7 @@
 
 ## What is this?
 
-A CLI tool for CoreWeave DCTs to look up node/ticket context from the terminal. Built in one session, iteratively, starting from a single Jira API call and growing into a multi-source interactive app.
+A CLI tool for DCTs to look up node/ticket context from the terminal. Built in one session, iteratively, starting from a single Jira API call and growing into a multi-source interactive app.
 
 ## Data Sources
 
@@ -93,13 +93,13 @@ A CLI tool for CoreWeave DCTs to look up node/ticket context from the terminal. 
 
 ### Required
 ```bash
-export JIRA_EMAIL="you@coreweave.com"
+export JIRA_EMAIL="you@example.com"
 export JIRA_API_TOKEN="your-jira-token"
 ```
 
 ### Optional (NetBox)
 ```bash
-export NETBOX_API_URL="https://coreweave.cloud.netboxapp.com/api"
+export NETBOX_API_URL="https://netbox.example.com/api"
 export NETBOX_API_TOKEN="your-netbox-token"
 ```
 

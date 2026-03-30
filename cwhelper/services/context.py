@@ -259,7 +259,7 @@ def _extract_description_details(fields: dict) -> dict:
             if re.match(r"^node\s*(name)?:", text, re.IGNORECASE) and not node_name:
                 node_name = re.split(r":\s*", text, maxsplit=1)[1].strip()
 
-            # Extract rack/DH from device hostnames like dh1-r264-node-02-us-central-07a
+            # Extract rack/DH from device hostnames like dh1-r264-node-02-us-site-01a
             if not desc_rack:
                 m = re.search(r'\b(dh\w*)-r(\d+)-', text, re.IGNORECASE)
                 if m:
@@ -330,7 +330,7 @@ def _extract_psu_info(description: str) -> dict | None:
     if psu_ids:
         info["psu_id"] = psu_ids[0]
 
-    # Deviceslot: "at deviceslot dh1-r306-node-04-us-central-07a"
+    # Deviceslot: "at deviceslot dh1-r306-node-04-us-site-01a"
     m = re.search(r'(?:deviceslot|at)\s+(dh\d*-r\d+-node-\d+-[\w-]+)', description, re.IGNORECASE)
     if m:
         info["deviceslot"] = m.group(1)
@@ -532,13 +532,13 @@ def _render_adf_description(node: dict, indent: str = "    ") -> tuple[list[str]
 
 
 def _parse_rack_location(rack_loc: str) -> dict | None:
-    """Parse 'US-EVI01.DH1.R64.RU34' into structured components.
+    """Parse 'US-SITE01.DH1.R64.RU34' into structured components.
 
     Returns {site_code, dh, rack, ru} or None if unparseable.
     """
     if not rack_loc:
         return None
-    # Strip parenthetical annotations like "(US-EVI01:dh1:244)" from rack locations
+    # Strip parenthetical annotations like "(US-SITE01:dh1:244)" from rack locations
     rack_loc = re.sub(r'\s*\([^)]*\)', '', rack_loc)
     parts = rack_loc.split(".")
     if len(parts) < 3:
@@ -615,8 +615,8 @@ def _get_physical_neighbors(rack_num: int, layout: dict) -> dict:
 def _short_device_name(name: str) -> str:
     """Shorten a NetBox device name for rack view display.
 
-    Node devices:  dh1-r064-node-01-us-central-07a  →  Node 1
-    Other devices: dh1-bmc-a2-01-r012-us-central-07a →  BMC A2 01
+    Node devices:  dh1-r064-node-01-us-site-01a  →  Node 1
+    Other devices: dh1-bmc-a2-01-r012-us-site-01a →  BMC A2 01
     """
     if not name:
         return "?"

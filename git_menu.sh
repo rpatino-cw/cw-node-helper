@@ -1,11 +1,11 @@
 #!/bin/bash
 # ================================================================
 # git_menu.sh — Safe git helper for cw-node-helper
-# Locked to branch: rpatino/cw-node-helper
-# Locked to remote: coreweave/TopoWeave
+# Locked to branch: main
+# Locked to remote: origin
 # ================================================================
 
-BRANCH="rpatino/cw-node-helper"
+BRANCH="main"
 REMOTE="origin"
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -86,7 +86,7 @@ print_banner() {
     echo ""
     echo -e "  ${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "  ${BOLD}${CYAN}┃${RESET}  ${BOLD}${WHITE}cw-node-helper   Git  Menu${RESET}            ${BOLD}${CYAN}┃${RESET}"
-    echo -e "  ${BOLD}${CYAN}┃${RESET}  ${DIM}rpatino/cw-node-helper @ TopoWeave${RESET}   ${BOLD}${CYAN}┃${RESET}"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  ${DIM}main @ cw-node-helper${RESET}   ${BOLD}${CYAN}┃${RESET}"
     echo -e "  ${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 }
 
@@ -307,11 +307,11 @@ do_ci_check() {
     echo ""
 
     if [ -n "$GH" ]; then
-        $GH run list --repo coreweave/TopoWeave --branch "$BRANCH" --limit 5 2>&1
+        $GH run list --repo your-org/node-helper --branch "$BRANCH" --limit 5 2>&1
     else
         echo -e "  ${YELLOW}gh CLI not in PATH.${RESET}"
         echo -e "  ${DIM}Check manually:${RESET}"
-        echo -e "  ${CYAN}https://github.com/coreweave/TopoWeave/actions${RESET}"
+        echo -e "  ${CYAN}https://github.com/your-org/node-helper/actions${RESET}"
     fi
     echo ""
     echo -e "  ${DIM}──────────────────────────────────────────────────${RESET}"

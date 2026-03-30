@@ -407,6 +407,7 @@ def _rich_print_menu(
     ai_available: bool = False,
     compact: bool = False,
     cluster_status: str | None = None,
+    cwctl_available: bool | None = None,
 ):
     """3D-2D minimal menu: no panels, no section labels, structure from whitespace only."""
 
@@ -429,9 +430,28 @@ def _rich_print_menu(
         t = Text(INDENT)
         t.append("● ", style=f"bold {color}")
         t.append("teleport", style="dim")
-        t.append("  us-central-07a", style="bold white")
+        _site_slug = os.environ.get("DEFAULT_SITE_SLUG", "us-site-01a")
+        t.append(f"  {_site_slug}", style="bold white")
         t.append(f"  {cluster_status}", style=color)
         console.print(t)
+        console.print()
+
+    # cwctl status — silent when still checking
+    if cwctl_available is not None:
+        if cwctl_available:
+            t = Text(INDENT)
+            t.append("● ", style="bold green")
+            t.append("cwctl", style="dim")
+            t.append("  ready", style="green")
+            console.print(t)
+        else:
+            t = Text(INDENT)
+            t.append("○ ", style="dim")
+            t.append("cwctl", style="dim")
+            t.append("  not found", style="dim red")
+            t.append("  →  ", style="dim")
+            t.append("gh release download -R <org>/cwctl ...", style="dim italic")
+            console.print(t)
         console.print()
 
     # Stale alert — plain text, no panel

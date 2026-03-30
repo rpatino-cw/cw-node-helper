@@ -10,7 +10,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
-from cwhelper.config import BOLD, CYAN, DIM, GREEN, KNOWN_SITES, RED, RESET, YELLOW
+from cwhelper.config import BOLD, CYAN, DIM, GREEN, JIRA_BASE_URL, KNOWN_SITES, RED, RESET, YELLOW
 __all__ = [
     '_walkthrough_pick_site_dh', '_walkthrough_annotate_device',
     '_walkthrough_save_notes', '_walkthrough_resume_prompt',
@@ -51,6 +51,52 @@ _WALKTHROUGH_HTML_PATH   = os.path.expanduser("~/.cwhelper_walkthrough_report.ht
 _RMA_SHEET_URL = "https://docs.google.com/spreadsheets/d/1vTcB9-NEIXk1VowTL6NkBHYjioeosgn2WTDnVuABByo/edit?gid=1318234478#gid=1318234478"
 _OVERHEAD_MAP_URL = "https://docs.google.com/spreadsheets/d/1dtuaNuDuLPGzqkUb6pBOBM-meeoEioGata3xGkq-zgI/edit?gid=0#gid=0"
 
+_DOWNLOADS = os.path.expanduser("~/Downloads")
+
+
+def _cleanup_old_tracker_dupes():
+    """Remove older duplicate tracker files from Downloads.
+
+    macOS creates 'name (1).csv', 'name (2).csv' on re-download.
+    Keeps only the newest file, deletes the rest.
+    """
+    import glob as _glob
+    patterns = [
+        "Device-Tracker*", "*Device*Tracker*",
+        "*Device-Tracker*", "*Device*Tracker*", "*Active Devices*",
+    ]
+    candidates = set()
+    for pattern in patterns:
+        for path in _glob.glob(os.path.join(_DOWNLOADS, pattern)):
+            if path.lower().endswith((".csv", ".xlsx")):
+                candidates.add(path)
+
+    if len(candidates) <= 1:
+        return
+
+    # Sort by mtime, newest first — keep newest, delete the rest
+    sorted_files = sorted(candidates, key=lambda p: os.path.getmtime(p), reverse=True)
+    kept = sorted_files[0]
+    for old in sorted_files[1:]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+
+
+_ATLASSIAN_BROWSE_PREFIX = f"{JIRA_BASE_URL}/browse/"
+
+
+def _normalize_ticket_key(val: str) -> str:
+    """Strip Atlassian browse URL to just the ticket key. 'https://...browse/HO-74412' → 'HO-74412'."""
+    if not val:
+        return val
+    val = val.strip()
+    if val.startswith(_ATLASSIAN_BROWSE_PREFIX):
+        return val[len(_ATLASSIAN_BROWSE_PREFIX):]
+    return val
+
+
 _ISSUE_TEMPLATE_GROUPS = [
     ("Hardware", [
         ("1",  "LED issue",         "amber/red LED, no obvious cause"),
@@ -81,7 +127,7 @@ _ISSUE_TEMPLATE_GROUPS = [
 _ISSUE_TEMPLATES = [t for _, items in _ISSUE_TEMPLATE_GROUPS for t in items]
 _CUSTOM_KEY = "13"
 
-# Matches the CoreWeave Slack walkthrough form
+# Matches the Slack walkthrough form
 _CHECKLIST = [
     ("jira_queue",        "Checked Jira Queue",                        "yn"),
     ("entry_secured",     "Data Hall Entry Secured",                   "yn"),
@@ -272,14 +318,15 @@ def _walkthrough_prewalk_brief(site_code: str, dh: str, email: str, token: str) 
 
 def _walkthrough_banner(site_code: str, dh: str, notes: list, carryover: list = None,
                          visited: int = 0, total_racks: int = 0,
-                         started_at: str = None):
+                         started_at: str = None, zone: str = None):
     """Persistent header printed at the top of every walkthrough screen."""
     count   = len(notes)
     pending = sum(1 for c in (carryover or []) if c.get("status") == "pending")
     noun    = "annotation" if count == 1 else "annotations"
 
     print(f"\n  {BOLD}{GREEN}◉  WALKTHROUGH MODE{RESET}  {DIM}{'─' * 48}{RESET}")
-    line2 = (f"  {BOLD}{site_code}{RESET}  {DIM}/{RESET}  {BOLD}{dh}{RESET}"
+    zone_tag = f"  {DIM}({zone}){RESET}" if zone else ""
+    line2 = (f"  {BOLD}{site_code}{RESET}  {DIM}/{RESET}  {BOLD}{dh}{RESET}{zone_tag}"
              f"  {DIM}│{RESET}  {CYAN}{BOLD}{count}{RESET} {DIM}{noun}{RESET}")
     if pending:
         line2 += f"  {DIM}│{RESET}  {YELLOW}{BOLD}{pending}{RESET} {DIM}unverified from last shift{RESET}"
@@ -315,6 +362,74 @@ def _walkthrough_banner(site_code: str, dh: str, notes: list, carryover: list = 
         print(f"  {DIM}Visited{RESET}  {BOLD}{visited}{RESET}{DIM}/{total_racks}{RESET}"
               f"{elapsed_str}{eta_str}")
     print(f"  {DIM}{'─' * 68}{RESET}\n")
+
+
+# ── Zone picker ───────────────────────────────────────────────────────────────
+
+def _walkthrough_pick_zone(rack_lookup: dict) -> tuple:
+    """Prompt user to pick a walk zone. Returns (filtered_rack_lookup, zone_label) or (rack_lookup, None)."""
+    # Extract and sort rack numbers
+    rack_nums = []
+    for name in rack_lookup:
+        m = _re.search(r'\d+', name)
+        if m:
+            rack_nums.append(int(m.group()))
+    if not rack_nums:
+        return rack_lookup, None
+
+    rack_nums.sort()
+    mid = rack_nums[len(rack_nums) // 2]
+    lo, hi = rack_nums[0], rack_nums[-1]
+
+    print(f"\n  {BOLD}Walk zone:{RESET}")
+    print(f"    {BOLD}1{RESET}. Full hall  {DIM}(all {len(rack_lookup)} racks){RESET}")
+    print(f"    {BOLD}2{RESET}. First half  {DIM}(R{lo:03d}–R{mid - 1:03d}){RESET}")
+    print(f"    {BOLD}3{RESET}. Second half  {DIM}(R{mid:03d}–R{hi:03d}){RESET}")
+    print(f"    {BOLD}4{RESET}. Custom range")
+
+    try:
+        raw = input(f"\n  Zone [1]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return rack_lookup, None
+    if not raw or raw == "1":
+        return rack_lookup, None
+
+    if raw == "2":
+        start, end = lo, mid - 1
+        label = f"R{lo:03d}–R{mid - 1:03d} (first half)"
+    elif raw == "3":
+        start, end = mid, hi
+        label = f"R{mid:03d}–R{hi:03d} (second half)"
+    elif raw == "4":
+        try:
+            range_raw = input(f"  Range (e.g. 200-300): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return rack_lookup, None
+        parts = _re.split(r'[\s\-–]+', range_raw.upper().lstrip("R"))
+        if len(parts) != 2:
+            print(f"  {DIM}Invalid range. Using full hall.{RESET}")
+            return rack_lookup, None
+        try:
+            start, end = int(parts[0]), int(parts[1])
+        except ValueError:
+            print(f"  {DIM}Invalid range. Using full hall.{RESET}")
+            return rack_lookup, None
+        label = f"R{start:03d}–R{end:03d} (custom)"
+    else:
+        return rack_lookup, None
+
+    filtered = {}
+    for name, obj in rack_lookup.items():
+        m = _re.search(r'\d+', name)
+        if m and start <= int(m.group()) <= end:
+            filtered[name] = obj
+
+    if not filtered:
+        print(f"  {DIM}No racks in that range. Using full hall.{RESET}")
+        return rack_lookup, None
+
+    print(f"  {GREEN}✓ Zone:{RESET} {label}  {DIM}({len(filtered)} racks){RESET}")
+    return filtered, label
 
 
 # ── Site / DH picker ──────────────────────────────────────────────────────────
@@ -946,7 +1061,8 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
     # ── RMA tracker status for this device ────────────────────────────────
     if rack_rma:
         dev_rma = [r for r in rack_rma
-                   if dev_name and dev_name.lower() in r.get("node_name", "").lower()]
+                   if dev_name and (dev_name.lower() in r.get("node_name", "").lower()
+                                    or r.get("node_name", "").lower() in dev_name.lower())]
         if dev_rma:
             rma = dev_rma[0]
             status_val = rma.get("status", "?")
@@ -968,6 +1084,27 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
             if rma.get("notes"):
                 print(f"     Notes:     {DIM}{rma['notes']}{RESET}")
             print()
+
+            # Offer to skip — node is already tracked on the sheet
+            try:
+                skip = input(f"  {DIM}Already on sheet. Skip annotation? [y/N]:{RESET} ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                skip = "n"
+            if skip == "y":
+                # Return a minimal annotation so it still appears in the report
+                return {
+                    "rack":        rack_label,
+                    "ru":          dev.get("position"),
+                    "device_name": dev_name or "?",
+                    "status":      (dev.get("status") or {}).get("label", "?"),
+                    "issue_type":  rma.get("status", "On sheet"),
+                    "note":        f"[ON SHEET] {rma.get('issue', 'tracked')}",
+                    "ongoing":     False,
+                    "jira_key":    _normalize_ticket_key(rma.get("ho_ticket", "")),
+                    "rma_ticket":  _normalize_ticket_key(rma.get("ho_ticket", "")),
+                    "on_sheet":    True,
+                    "timestamp":   datetime.now(timezone.utc).strftime(_ISO_FMT),
+                }
 
     result = _walkthrough_pick_template()
     if not result:
@@ -1023,7 +1160,8 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
     rma_ticket = None
     if rack_rma:
         dev_rma = [r for r in rack_rma
-                   if dev_name and dev_name.lower() in r.get("node_name", "").lower()]
+                   if dev_name and (dev_name.lower() in r.get("node_name", "").lower()
+                                    or r.get("node_name", "").lower() in dev_name.lower())]
         if dev_rma and dev_rma[0].get("ho_ticket"):
             rma_ticket = dev_rma[0]["ho_ticket"]
 
@@ -1044,6 +1182,15 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
           f"{DIM}— {issue_type}{RESET}{ongoing_tag}")
     if jira_key:
         print(f"  {GREEN}✓ Commented:{RESET}  {jira_key}")
+    if rma_ticket:
+        print(f"  {GREEN}✓ On sheet:{RESET}   {CYAN}{rma_ticket}{RESET}  {DIM}— already tracked on Device tracker/RMA{RESET}")
+    elif rack_rma:
+        dev_rma_check = [r for r in rack_rma
+                         if dev_name and (dev_name.lower() in r.get("node_name", "").lower()
+                                          or r.get("node_name", "").lower() in dev_name.lower())]
+        if dev_rma_check:
+            sheet_status = dev_rma_check[0].get("status", "?")
+            print(f"  {GREEN}✓ On sheet:{RESET}   {DIM}[{sheet_status}] — already tracked on Device tracker/RMA{RESET}")
     return annotation
 
 
@@ -1057,36 +1204,18 @@ def _walkthrough_build_report(notes: list, session: dict,
     """Build a plain-text walkthrough report with optional checklist and carryover."""
     site     = session.get("site_code", "?")
     dh       = session.get("dh", "?")
-    started  = session.get("started_at", "?")
-    finished = datetime.now(timezone.utc).strftime(_ISO_FMT)
     tech     = session.get("tech", "")
-
-    # Compute duration
-    duration_str = ""
-    try:
-        t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
-        t1 = datetime.fromisoformat(finished.replace("Z", "+00:00"))
-        mins = int((t1 - t0).total_seconds() // 60)
-        duration_str = f"{mins} min"
-    except Exception:
-        pass
 
     lines = [
         "WALKTHROUGH REPORT",
         "=" * 60,
-        f"Site:     {site}",
-        f"DH:       {dh}",
+        f"Site: {site}  DH: {dh}" + (f"  Tech: {tech}" if tech else ""),
     ]
-    if tech:
-        lines.append(f"Tech:     {tech}")
+    zone = session.get("zone")
+    if zone:
+        lines[-1] += f"  Zone: {zone}"
     lines += [
-        f"Started:  {started}",
-        f"Finished: {finished}",
-    ]
-    if duration_str:
-        lines.append(f"Duration: {duration_str}")
-    lines += [
-        f"Notes:    {len(notes)}",
+        f"Notes: {len(notes)}",
         "=" * 60,
         "",
     ]
@@ -1187,19 +1316,41 @@ def _walkthrough_build_report(notes: list, session: dict,
             for n in rack_notes:
                 issue  = n.get("issue_type") or n.get("note", "?")
                 detail = n.get("note", "")
-                lines.append(f"  ├ RU{n.get('ru', '?'):>3}  {n.get('device_name', '?')}  [{n.get('status', '?')}]")
-                lines.append(f"  │   Issue:  {issue}")
-                if detail and detail != issue:
-                    lines.append(f"  │   Detail: {detail}")
+                sheet_tag = "  ⟵ ON SHEET" if n.get("on_sheet") else ""
+                # Build ticket string
                 tickets = []
                 if n.get("jira_key"):
-                    tickets.append(n["jira_key"])
+                    tickets.append(_normalize_ticket_key(n["jira_key"]))
                 if n.get("rma_ticket"):
-                    tickets.append(n["rma_ticket"])
-                if tickets:
-                    lines.append(f"  │   Ticket: {', '.join(tickets)}")
-                lines.append(f"  │   Time:   {n.get('timestamp', '?')}")
-                lines.append(f"  │")
+                    tickets.append(_normalize_ticket_key(n["rma_ticket"]))
+                seen = set()
+                tickets = [t for t in tickets if t and t not in seen and not seen.add(t)]
+                tkt_str = f"  {', '.join(tickets)}" if tickets else ""
+                lines.append(f"  RU{n.get('ru', '?'):>3}  {n.get('device_name', '?')}  [{n.get('status', '?')}]  {issue}{tkt_str}{sheet_tag}")
+                if detail and detail != issue:
+                    lines.append(f"        {detail}")
+        lines.append("")
+
+    # Add to sheet — new issues not yet tracked
+    new_for_sheet = [n for n in notes if not n.get("on_sheet")]
+    if new_for_sheet:
+        lines.append("ADD TO SHEET")
+        lines.append("─" * 40)
+        lines.append(f"  {'RACK':<8}  {'RU':<4}  {'DEVICE':<30}  {'ISSUE':<20}  TICKET")
+        for n in new_for_sheet:
+            rack = n.get("rack", "?")
+            ru = str(n.get("ru", "?"))
+            device = n.get("device_name", "?")
+            issue = n.get("issue_type") or n.get("note", "?")
+            tickets = []
+            if n.get("jira_key"):
+                tickets.append(_normalize_ticket_key(n["jira_key"]))
+            if n.get("rma_ticket"):
+                tickets.append(_normalize_ticket_key(n["rma_ticket"]))
+            seen = set()
+            tickets = [t for t in tickets if t and t not in seen and not seen.add(t)]
+            tkt_str = ", ".join(tickets) if tickets else ""
+            lines.append(f"  {rack:<8}  {ru:<4}  {device:<30}  {issue:<20}  {tkt_str}")
         lines.append("")
 
     # Trending / repeat issues — history already includes today (saved before report build)
@@ -1221,22 +1372,15 @@ def _walkthrough_build_report(notes: list, session: dict,
                 lines.append(f"  {'':36}  {'':8}         dates: {dates}")
             lines.append("")
 
-    # Summary
-    lines += [
-        "─" * 60,
-        f"Racks visited:     {len({n.get('rack') for n in notes})}",
-        f"New annotations:   {len(notes)}",
-    ]
+    # Summary — compact single line
+    rack_count = len({n.get("rack") for n in notes})
+    new_count = len([n for n in notes if not n.get("on_sheet")])
+    sheet_count = len([n for n in notes if n.get("on_sheet")])
+    summary = f"Racks: {rack_count}  |  New: {new_count}  |  On sheet: {sheet_count}  |  Total: {len(notes)}"
     if carryover:
         counts = _count_carryover(carryover)
-        lines += [
-            f"Carryover total:   {len(carryover)}",
-            f"  No issue found:  {counts[_STATUS_RESOLVED]}",
-            f"  Not visited:     {counts[_STATUS_SKIPPED]}",
-            f"  Still present:   {counts[_STATUS_PERSISTENT]}",
-            f"  Worsened:        {counts[_STATUS_WORSENED]}",
-        ]
-    lines.append("─" * 60)
+        summary += f"  |  Carryover: {counts[_STATUS_RESOLVED]}/{len(carryover)} resolved"
+    lines += ["─" * 60, summary, "─" * 60]
     return "\n".join(lines)
 
 
@@ -1952,6 +2096,11 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
 
     print(f"  {DIM}{len(rack_lookup)} rack(s) loaded.{RESET}")
 
+    # ── Zone selection (split hall between techs) ────────────────────────────
+    rack_lookup, zone_label = _walkthrough_pick_zone(rack_lookup)
+    if zone_label:
+        session["zone"] = zone_label
+
     # ── Pre-walk brief: open Jira tickets in this DH ──────────────────────────
     _walkthrough_prewalk_brief(site_code, dh, email, token)
 
@@ -1973,12 +2122,42 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
             if stale:
                 print(f"  {YELLOW}{BOLD}{rma_count}{RESET} {YELLOW}node(s) in RMA tracker across "
                       f"{len(rma_by_rack)} rack(s)  (CSV: {age} — STALE){RESET}")
-                print(f"  {YELLOW}Type 'sheet' to download a fresh copy{RESET}")
             else:
                 print(f"  {RED}{BOLD}{rma_count}{RESET} {DIM}node(s) in RMA tracker across "
                       f"{len(rma_by_rack)} rack(s)  (CSV: {age}){RESET}")
-        elif stale:
-            print(f"  {YELLOW}RMA tracker CSV is {age} — consider downloading a fresh copy{RESET}")
+        if stale:
+            try:
+                dl = input(f"  {YELLOW}CSV is stale ({age}). Refresh from Downloads? [Y/n]:{RESET} ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                dl = "n"
+            if dl != "n":
+                # Clean up old duplicates — macOS creates "name (1).csv", "name (2).csv"
+                _cleanup_old_tracker_dupes()
+                # Re-scan Downloads for the newest file
+                fresh = _find_latest_file()
+                if fresh:
+                    try:
+                        rma_by_rack = _get_rma_data(dh) or {}
+                        rma_count = sum(len(v) for v in rma_by_rack.values())
+                        new_age = _rma_file_age()
+                        print(f"  {GREEN}✓ Reloaded:{RESET}  {rma_count} node(s) across "
+                              f"{len(rma_by_rack)} rack(s)  {DIM}(CSV: {new_age}){RESET}")
+                    except Exception:
+                        print(f"  {YELLOW}Reload failed — continuing with old data{RESET}")
+                else:
+                    print(f"  {YELLOW}No tracker file found in Downloads.{RESET}")
+                    try:
+                        dl2 = input(f"  Open the sheet to download? [Y/n]: ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        dl2 = "n"
+                    if dl2 != "n":
+                        try:
+                            subprocess.Popen(["open", _RMA_SHEET_URL],
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            print(f"  {DIM}Opening sheet... download the CSV, then restart walkthrough.{RESET}")
+                            return
+                        except Exception:
+                            print(f"  {DIM}{_RMA_SHEET_URL}{RESET}")
     else:
         if _get_rma_data and not _rma_available():
             print(f"  {YELLOW}RMA tracker: no CSV in Downloads.{RESET}")
@@ -2021,7 +2200,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
         _clear_screen()
         _walkthrough_banner(site_code, dh, notes, carryover,
                              visited=len(_visited_set), total_racks=len(rack_lookup),
-                             started_at=_started_ts)
+                             started_at=_started_ts, zone=session.get("zone"))
 
         # Build sorted pending list — used for numbered shortcuts
         pending_items = [c for c in carryover if c.get("status") == "pending"]
@@ -2126,7 +2305,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                         _clear_screen()
                         _walkthrough_banner(site_code, dh, notes, carryover,
                              visited=len(_visited_set), total_racks=len(rack_lookup),
-                             started_at=_started_ts)
+                             started_at=_started_ts, zone=session.get("zone"))
                         remaining = verify_queue[verify_queue.index(vr_num):]
                         print(f"  {CYAN}{BOLD}VERIFY MODE{RESET}  {DIM}{len(remaining)} rack(s) remaining{RESET}\n")
                         print(f"  {BOLD}{vr_label}{RESET}  {DIM}— {len(vr_racked)} device(s){RESET}\n")
@@ -2260,7 +2439,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
             _clear_screen()
             _walkthrough_banner(site_code, dh, notes, carryover,
                              visited=len(_visited_set), total_racks=len(rack_lookup),
-                             started_at=_started_ts)
+                             started_at=_started_ts, zone=session.get("zone"))
             if notes:
                 print(f"  {BOLD}Today's annotations:{RESET}\n")
                 for n in notes:
@@ -2284,7 +2463,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
             _clear_screen()
             _walkthrough_banner(site_code, dh, notes, carryover,
                              visited=len(_visited_set), total_racks=len(rack_lookup),
-                             started_at=_started_ts)
+                             started_at=_started_ts, zone=session.get("zone"))
             if not carryover:
                 print(f"  {DIM}No carryover items loaded.{RESET}\n")
             else:
@@ -2368,7 +2547,7 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
             _clear_screen()
             _walkthrough_banner(site_code, dh, notes, carryover,
                              visited=len(_visited_set), total_racks=len(rack_lookup),
-                             started_at=_started_ts)
+                             started_at=_started_ts, zone=session.get("zone"))
             print(f"  {BOLD}{rack_label}{RESET}  {DIM}— {len(racked)} device(s){RESET}\n")
 
             # Show carryover alert for this rack (any status, not just pending)
@@ -2519,16 +2698,17 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 state["walkthrough_carryover"] = carryover
                 _walkthrough_save_notes(state, notes, session)
 
-                # Offer photo attach — use commented ticket or let user type one
-                photo_key = annotation.get("jira_key") or ""
-                if not photo_key and email and token:
-                    try:
-                        typed = input(f"\n  Attach photo? Enter ticket key (or ENTER to skip): ").strip().upper()
-                    except (EOFError, KeyboardInterrupt):
-                        typed = ""
-                    photo_key = typed
-                if photo_key:
-                    _walkthrough_attach_photo(photo_key, email, token)
+                # Offer photo attach — skip entirely for on-sheet nodes
+                if not annotation.get("on_sheet"):
+                    photo_key = annotation.get("jira_key") or ""
+                    if not photo_key and email and token:
+                        try:
+                            typed = input(f"\n  Attach photo? Enter ticket key (or ENTER to skip): ").strip().upper()
+                        except (EOFError, KeyboardInterrupt):
+                            typed = ""
+                        photo_key = typed
+                    if photo_key:
+                        _walkthrough_attach_photo(photo_key, email, token)
 
             try:
                 more = input(f"\n  Annotate another device in {rack_label}? [y/N]: ").strip().lower()
