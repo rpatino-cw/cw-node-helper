@@ -90,6 +90,7 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
     Returns:
         {
             "rack_open":    [...],   # open unassigned tickets in same rack
+            "rack_waiting": [...],   # "Waiting For Support" tickets in same rack (not mine)
             "dh_open":      [...],   # open unassigned tickets in same DH, different rack
             "others_active": {       # another DCT with fresh (<3h) In Progress work in same rack
                 "name": str,
@@ -120,7 +121,7 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
     site      = ctx.get("site", "")                   # e.g. "US-SITE01"
     result    = {
         "rack_label": f"R{rack_num}", "dh_label": dh,
-        "rack_open": [], "row_open": [], "dh_open": [],
+        "rack_open": [], "rack_waiting": [], "row_open": [], "dh_open": [],
         "row_label": row_label, "others_active": None,
     }
 
@@ -141,6 +142,8 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
         )
         for iss in all_site_open:
             loc = (iss.get("fields", {}).get("customfield_10207") or "")
+            if isinstance(loc, list):
+                loc = loc[0] if loc else ""
             if isinstance(loc, dict):
                 loc = loc.get("value", "") or ""
             p = _parse_rack_location(str(loc))
@@ -153,6 +156,27 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
                 result["row_open"].append(iss)
             else:
                 result["dh_open"].append(iss)
+    except Exception:
+        pass
+
+    # --- "Waiting For Support" tickets in same rack (assigned to others) ---
+    try:
+        waiting_site = _jql_search(
+            f'project = "DO" AND {site_clause} '
+            f'AND status = "Waiting For Support" AND assignee != currentUser() '
+            f'AND key != "{current_key}" ORDER BY created ASC',
+            email, token, max_results=100, use_cache=False,
+            fields=["key", "summary", "assignee", "customfield_10193", "customfield_10207"],
+        )
+        for iss in waiting_site:
+            loc = (iss.get("fields", {}).get("customfield_10207") or "")
+            if isinstance(loc, list):
+                loc = loc[0] if loc else ""
+            if isinstance(loc, dict):
+                loc = loc.get("value", "") or ""
+            p = _parse_rack_location(str(loc))
+            if p and p.get("rack") == rack_num:
+                result["rack_waiting"].append(iss)
     except Exception:
         pass
 
@@ -169,6 +193,8 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
         rack_active = []
         for iss in active:
             loc = (iss.get("fields", {}).get("customfield_10207") or "")
+            if isinstance(loc, list):
+                loc = loc[0] if loc else ""
             if isinstance(loc, dict):
                 loc = loc.get("value", "") or ""
             p = _parse_rack_location(str(loc))
@@ -196,16 +222,17 @@ def _check_rack_tickets(ctx: dict, email: str, token: str) -> dict:
 
 def _show_rack_suggestions(ctx: dict, email: str, token: str, reassigned_from: str = "") -> None:
     """After grabbing a ticket, surface nearby open tickets and rack-conflict warnings."""
-    data         = _check_rack_tickets(ctx, email, token)
-    rack_open    = data.get("rack_open", [])
-    row_open     = data.get("row_open", [])
-    dh_open      = data.get("dh_open", [])
-    others       = data.get("others_active")
-    rack_label   = data.get("rack_label", "this rack")
-    row_label    = data.get("row_label", "this row")
-    dh_label     = data.get("dh_label", "this DH")
+    data          = _check_rack_tickets(ctx, email, token)
+    rack_open     = data.get("rack_open", [])
+    rack_waiting  = data.get("rack_waiting", [])
+    row_open      = data.get("row_open", [])
+    dh_open       = data.get("dh_open", [])
+    others        = data.get("others_active")
+    rack_label    = data.get("rack_label", "this rack")
+    row_label     = data.get("row_label", "this row")
+    dh_label      = data.get("dh_label", "this DH")
 
-    if not rack_open and not row_open and not dh_open and not others:
+    if not rack_open and not rack_waiting and not row_open and not dh_open and not others:
         return
 
     print(f"\n  {DIM}{'─' * 50}{RESET}")
@@ -298,6 +325,40 @@ def _show_rack_suggestions(ctx: dict, email: str, token: str, reassigned_from: s
                             print(f"  {YELLOW}{l_fail} failed{RESET}", end="")
                         print()
 
+    # Offer to bulk-grab "Waiting For Support" tickets in the same rack
+    if rack_waiting:
+        count = len(rack_waiting)
+        print(f"\n  {YELLOW}{count} Waiting For Support ticket{'s' if count != 1 else ''} in {rack_label}:{RESET}")
+        for iss in rack_waiting[:5]:
+            f        = iss.get("fields", {})
+            tag      = f.get("customfield_10193") or "—"
+            tag      = tag.get("value", tag) if isinstance(tag, dict) else tag
+            assignee = (f.get("assignee") or {}).get("displayName", "")
+            first    = assignee.split()[0] if assignee else f"{RED}—{RESET}"
+            smry     = f.get("summary", "")[:38]
+            print(f"    {DIM}{iss['key']}  {tag}  {first:<12}  {smry}{RESET}")
+        if len(rack_waiting) > 5:
+            print(f"    {DIM}... and {len(rack_waiting) - 5} more{RESET}")
+        try:
+            ans = input(f"\n  Grab all {count} waiting? [{GREEN}y{RESET}/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans == "y":
+            ok = fail = 0
+            for iss in rack_waiting:
+                k = iss["key"]
+                print(f"  {DIM}Grabbing {k}...{RESET}", end="", flush=True)
+                if _grab_ticket(k, email, token):
+                    print(f"\r  {GREEN}✓{RESET} {k} grabbed          ")
+                    ok += 1
+                else:
+                    print(f"\r  {YELLOW}✗{RESET} {k} — failed         ")
+                    fail += 1
+            print(f"\n  {GREEN}{BOLD}{ok} grabbed{RESET}", end="")
+            if fail:
+                print(f"  {YELLOW}{fail} failed{RESET}", end="")
+            print()
+
     # Offer to bulk-grab open tickets in the same row (other cabs)
     if row_open:
         count = len(row_open)
@@ -307,9 +368,15 @@ def _show_rack_suggestions(ctx: dict, email: str, token: str, reassigned_from: s
             tag  = f.get("customfield_10193") or "—"
             tag  = tag.get("value", tag) if isinstance(tag, dict) else tag
             loc  = (f.get("customfield_10207") or "")
+            if isinstance(loc, list):
+                loc = loc[0] if loc else ""
             loc  = loc.get("value", loc) if isinstance(loc, dict) else str(loc)
-            # Extract just the rack portion (e.g. "DH1.R271" → "R271")
-            cab  = loc.split(".")[-1] if "." in loc else loc
+            # Extract just the rack portion (e.g. "DH1.R271" → "R271" or "site:dh1:271:26" → "R271")
+            if ":" in loc and "." not in loc:
+                _cp = loc.split(":")
+                cab = f"R{_cp[2]}" if len(_cp) >= 3 else loc
+            else:
+                cab  = loc.split(".")[-1] if "." in loc else loc
             smry = f.get("summary", "")[:38]
             print(f"    {DIM}{iss['key']}  {cab:<6}  {tag}  {smry}{RESET}")
         if len(row_open) > 5:

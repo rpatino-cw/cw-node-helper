@@ -111,13 +111,7 @@ ISSUE_DETAIL_FIELDS = [
 ]
 
 # Known site strings (from Jira cf[10194] values seen in real tickets).
-KNOWN_SITES = [s.strip() for s in os.environ.get("KNOWN_SITES", "").split(",") if s.strip()] or [
-    "US-SITE-01A",
-    "US-SITE-02A",
-    "US-SITE-03",
-    "US-SITE-03A",
-    "US-SITE-04A",
-]
+KNOWN_SITES = [s.strip() for s in os.environ.get("KNOWN_SITES", "").split(",") if s.strip()]
 
 # ---------------------------------------------------------------------------
 # ANSI colors

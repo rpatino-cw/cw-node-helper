@@ -43,6 +43,8 @@ def _run_cab_view(rack_input: str, site: str, email: str, token: str):
     rack_tickets = []
     for _iss in all_tickets:
         _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+        if isinstance(_loc, list):
+            _loc = _loc[0] if _loc else ""
         if isinstance(_loc, dict):
             _loc = _loc.get("value", "") or ""
         _p = _parse_rack_location(str(_loc))

@@ -334,7 +334,7 @@ class TestDetailViewRouting(unittest.TestCase):
         with patch.object(_actions, "_draw_mini_dh_map") as dm:
             # 'r' draws map and waits for input, then loop; 'b' exits
             self._run_prompt(["r", "", "b"], ctx=ctx)
-            dm.assert_called_once_with("US-SITE01.DH1.R64.RU34")
+            dm.assert_called_once_with("US-SITE01.DH1.R64.RU34", site="")
 
     def test_c_toggles_comments(self):
         ctx = _base_ticket_ctx(comments=[{"author": "A", "body": "x", "created": "2024-01-01"}])

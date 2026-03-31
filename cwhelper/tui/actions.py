@@ -228,6 +228,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
         if ctx.get("rack_location"):
             status_items.append(btn("hg", "Give cab", CYAN))
             status_items.append(btn("lg", "Link cab", MAGENTA))
+            status_items.append(btn("ws", "Grab waiting cab", GREEN))
 
     if status_items:
         print(f"  {BOLD}{WHITE}Actions{RESET}")
@@ -651,6 +652,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _spokes = []
             for _iss in _cab_all:
                 _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+                if isinstance(_loc, list):
+                    _loc = _loc[0] if _loc else ""
                 if isinstance(_loc, dict):
                     _loc = _loc.get("value", "") or ""
                 _pp = _parse_rack_location(str(_loc))
@@ -669,6 +672,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _tag_node: dict[str, str] = {}   # service_tag → "Node 03"
             for _iss in _cab_all:
                 _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+                if isinstance(_loc, list):
+                    _loc = _loc[0] if _loc else ""
                 if isinstance(_loc, dict):
                     _loc = _loc.get("value", "") or ""
                 _pp = _parse_rack_location(str(_loc))
@@ -808,6 +813,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _mine_rack = []
             for _iss in _mine_site:
                 _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+                if isinstance(_loc, list):
+                    _loc = _loc[0] if _loc else ""
                 if isinstance(_loc, dict):
                     _loc = _loc.get("value", "") or ""
                 _pp = _parse_rack_location(str(_loc))
@@ -1013,14 +1020,15 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                 _print_pretty(ctx)
                 continue
 
-            # --- Fetch open unassigned tickets in this cab ---
+            # --- Fetch all open tickets in this cab (assigned or not) ---
+            _current = ctx.get("issue_key", "")
             print(f"\n  {DIM}Checking {_rl} for open tickets...{RESET}", end="", flush=True)
             try:
                 _site_open = _jql_search(
                     f'project = "DO" AND {_sc} AND status in ({_open_st}) '
-                    f'AND assignee is EMPTY ORDER BY created ASC',
+                    f'AND key != "{_current}" ORDER BY created ASC',
                     email, token, max_results=100, use_cache=False,
-                    fields=["key", "summary", "customfield_10193", "customfield_10207"],
+                    fields=["key", "summary", "assignee", "customfield_10193", "customfield_10207"],
                 )
             except Exception:
                 _site_open = []
@@ -1029,6 +1037,8 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             _cab_tickets = []
             for _iss in _site_open:
                 _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+                if isinstance(_loc, list):
+                    _loc = _loc[0] if _loc else ""
                 if isinstance(_loc, dict):
                     _loc = _loc.get("value", "") or ""
                 _pp = _parse_rack_location(str(_loc))
@@ -1036,7 +1046,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                     _cab_tickets.append(_iss)
 
             if not _cab_tickets:
-                print(f"\n  {DIM}No open unassigned tickets in {_rl}.{RESET}")
+                print(f"\n  {DIM}No open tickets in {_rl}.{RESET}")
                 _brief_pause()
                 _clear_screen()
                 _print_pretty(ctx)
@@ -1044,13 +1054,15 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
 
             # Show what we're about to assign
             _hg_count = len(_cab_tickets)
-            print(f"\n  {CYAN}{_hg_count} open unassigned ticket{'s' if _hg_count != 1 else ''} in {_rl}:{RESET}")
+            print(f"\n  {CYAN}{_hg_count} ticket{'s' if _hg_count != 1 else ''} in {_rl}:{RESET}")
             for _iss in _cab_tickets[:8]:
-                _f   = _iss.get("fields", {})
-                _tag = _f.get("customfield_10193") or "—"
-                _tag = _tag.get("value", _tag) if isinstance(_tag, dict) else _tag
-                _sm  = _f.get("summary", "")[:40]
-                print(f"    {DIM}{_iss['key']}  {_tag}  {_sm}{RESET}")
+                _f    = _iss.get("fields", {})
+                _tag  = _f.get("customfield_10193") or "—"
+                _tag  = _tag.get("value", _tag) if isinstance(_tag, dict) else _tag
+                _asgn = (_f.get("assignee") or {}).get("displayName", "")
+                _first = _asgn.split()[0] if _asgn else f"{RED}—{RESET}"
+                _sm   = _f.get("summary", "")[:36]
+                print(f"    {DIM}{_iss['key']}  {_tag}  {_first:<12}  {_sm}{RESET}")
             if _hg_count > 8:
                 print(f"    {DIM}... and {_hg_count - 8} more{RESET}")
 
@@ -1083,6 +1095,104 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
             print(f"\n  {GREEN}{BOLD}{h_ok} assigned to {selected['name']}{RESET}", end="")
             if h_fail:
                 print(f"  {YELLOW}{h_fail} failed{RESET}", end="")
+            print()
+            _brief_pause()
+            _clear_screen()
+            _print_pretty(ctx)
+            continue
+
+        # --- Grab "Waiting For Support" tickets in same cab ---
+        if choice == "ws" and ctx and email and token:
+            rack_loc = ctx.get("rack_location", "")
+            if not rack_loc:
+                print(f"\n  {DIM}No rack location for this ticket.{RESET}")
+                _brief_pause()
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+            _parsed = _parse_rack_location(rack_loc)
+            if not _parsed:
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+            _rack_num = _parsed["rack"]
+            _site     = ctx.get("site", "")
+            _sc       = f'cf[10194] = "{_site}"' if _site else f'cf[10207] ~ "{_parsed["site_code"]}"'
+            _rl       = f"R{_rack_num}"
+            _current  = ctx.get("issue_key", "")
+
+            print(f"\n  {DIM}Checking {_rl} for Waiting For Support tickets...{RESET}", end="", flush=True)
+            try:
+                _ws_site = _jql_search(
+                    f'project = "DO" AND {_sc} AND status = "Waiting For Support" '
+                    f'AND assignee != currentUser() AND key != "{_current}" ORDER BY created ASC',
+                    email, token, max_results=100, use_cache=False,
+                    fields=["key", "summary", "assignee", "customfield_10193", "customfield_10207"],
+                )
+            except Exception:
+                _ws_site = []
+            print(f"\r{'':60}\r", end="")
+
+            _ws_tickets = []
+            for _iss in _ws_site:
+                _loc = (_iss.get("fields", {}).get("customfield_10207") or "")
+                if isinstance(_loc, list):
+                    _loc = _loc[0] if _loc else ""
+                if isinstance(_loc, dict):
+                    _loc = _loc.get("value", "") or ""
+                _pp = _parse_rack_location(str(_loc))
+                if _pp and _pp.get("rack") == _rack_num:
+                    _ws_tickets.append(_iss)
+
+            if not _ws_tickets:
+                print(f"\n  {DIM}No Waiting For Support tickets in {_rl}.{RESET}")
+                _brief_pause()
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+
+            _ws_count = len(_ws_tickets)
+            print(f"\n  {YELLOW}{_ws_count} Waiting For Support ticket{'s' if _ws_count != 1 else ''} in {_rl}:{RESET}")
+            for _iss in _ws_tickets[:8]:
+                _f       = _iss.get("fields", {})
+                _tag     = _f.get("customfield_10193") or "—"
+                _tag     = _tag.get("value", _tag) if isinstance(_tag, dict) else _tag
+                _asgn    = (_f.get("assignee") or {}).get("displayName", "")
+                _first   = _asgn.split()[0] if _asgn else f"{RED}—{RESET}"
+                _sm      = _f.get("summary", "")[:38]
+                print(f"    {DIM}{_iss['key']}  {_tag}  {_first:<12}  {_sm}{RESET}")
+            if _ws_count > 8:
+                print(f"    {DIM}... and {_ws_count - 8} more{RESET}")
+
+            try:
+                confirm = input(
+                    f"\n  Grab all {_ws_count}? [{GREEN}y{RESET}/N]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                confirm = ""
+
+            if confirm != "y":
+                print(f"  {DIM}Cancelled.{RESET}")
+                _brief_pause()
+                _clear_screen()
+                _print_pretty(ctx)
+                continue
+
+            w_ok = w_fail = 0
+            for _iss in _ws_tickets:
+                _k = _iss["key"]
+                print(f"  {DIM}Grabbing {_k}...{RESET}", end="", flush=True)
+                if _grab_ticket(_k, email, token):
+                    print(f"\r  {GREEN}✓{RESET} {_k} grabbed          ")
+                    w_ok += 1
+                else:
+                    print(f"\r  {YELLOW}✗{RESET} {_k} — failed         ")
+                    w_fail += 1
+            _cfg._issue_cache.pop(ctx.get("issue_key", ""), None)
+            _refresh_ctx(ctx, email, token)
+            print(f"\n  {GREEN}{BOLD}{w_ok} grabbed{RESET}", end="")
+            if w_fail:
+                print(f"  {YELLOW}{w_fail} failed{RESET}", end="")
             print()
             _brief_pause()
             _clear_screen()
@@ -1543,7 +1653,7 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                         if _p:
                             _dh = _p["dh"]
                     rl = f"{_site}.{_dh}.R{_rn}"
-            _draw_mini_dh_map(rl)
+            _draw_mini_dh_map(rl, site=ctx.get("site", ""))
             input(f"  {DIM}Press ENTER to return...{RESET}")
             _clear_screen()
             _print_pretty(ctx)
@@ -1617,7 +1727,6 @@ def _post_detail_prompt(ctx: dict = None, email: str = None, token: str = None,
                             rack_label = f"R{rack_num}"
                             try:
                                 from cwhelper.clients.jira import _get_credentials
-                                from cwhelper.services.search import _jql_search
                                 email, token = _get_credentials()
                                 jql = (f'project = "DO" AND "Rack Location" ~ "R{rack_num}"'
                                        f' ORDER BY created DESC')

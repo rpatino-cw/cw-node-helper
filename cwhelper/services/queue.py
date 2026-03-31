@@ -361,6 +361,8 @@ def _run_queue_interactive(email: str, token: str, site: str,
         _hints += ["f filter", "s sort"]
         if _col_filters or _sort_by != "created":
             _hints.append("r reset")
+        if mine_only:
+            _hints.append("p start all")
 
         raw = _rich_queue_prompt(len(issues), extra_hints=_hints)
 
@@ -376,7 +378,7 @@ def _run_queue_interactive(email: str, token: str, site: str,
                 return None
             if raw_input.lower() == "ai":
                 return "ai"
-            if raw_input.lower() in ("x", "n", "a", "e", "f", "s", "r", "l") or raw_input == "*":
+            if raw_input.lower() in ("x", "n", "a", "e", "f", "s", "r", "l", "p") or raw_input == "*":
                 return raw_input
             try:
                 idx = int(raw_input)
@@ -432,6 +434,56 @@ def _run_queue_interactive(email: str, token: str, site: str,
             _col_filters = {}
             _sort_by = "created"
             continue
+
+        if chosen == "p" and mine_only:
+            # Bulk start — transition all startable tickets to In Progress
+            _startable = [
+                iss for iss in issues
+                if (iss.get("fields", {}).get("status", {}).get("name", "").lower()
+                    not in ("in progress", "verification", "closed", "done", "resolved"))
+            ]
+            if not _startable:
+                print(f"\n  {GREEN}No startable tickets — all already In Progress or beyond.{RESET}")
+                _brief_pause(1.5)
+                continue
+
+            print(f"\n  {BOLD}Tickets to start ({len(_startable)}):{RESET}")
+            for _pi in _startable:
+                _pf = _pi.get("fields", {})
+                _ps = _pf.get("status", {}).get("name", "?")
+                _psummary = _pf.get("summary", "")[:55]
+                print(f"    {CYAN}{_pi['key']}{RESET}  {DIM}{_ps:<20}{RESET}  {_psummary}")
+
+            try:
+                _pconf = input(f"\n  Start all {len(_startable)}? [{GREEN}y{RESET}/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                continue
+
+            if _pconf != "y":
+                print(f"  {DIM}Cancelled.{RESET}")
+                _brief_pause()
+                continue
+
+            _p_ok = _p_fail = 0
+            for _pi in _startable:
+                _pctx = {"issue_key": _pi["key"], "_transitions": None}
+                print(f"  {DIM}Starting {_pi['key']}...{RESET}", end="", flush=True)
+                if _execute_transition(_pctx, "start", email, token):
+                    print(f"\r  {GREEN}{BOLD}✓{RESET} {_pi['key']} → In Progress          ")
+                    _p_ok += 1
+                else:
+                    print(f"\r  {YELLOW}✗{RESET} {_pi['key']} — could not start        ")
+                    _p_fail += 1
+
+            if _p_ok:
+                _log_event("bulk_start", "", "", f"{_p_ok} tickets started from queue")
+            print(f"\n  {GREEN}{BOLD}{_p_ok} started{RESET}", end="")
+            if _p_fail:
+                print(f"  {YELLOW}{_p_fail} failed{RESET}", end="")
+            print()
+            _brief_pause()
+            continue  # re-fetch to show updated statuses
 
         if chosen == "s":
             _clear_screen()

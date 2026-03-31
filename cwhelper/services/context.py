@@ -540,6 +540,20 @@ def _parse_rack_location(rack_loc: str) -> dict | None:
         return None
     # Strip parenthetical annotations like "(US-SITE01:dh1:244)" from rack locations
     rack_loc = re.sub(r'\s*\([^)]*\)', '', rack_loc)
+
+    # Handle colon-separated format: "US-EVI01:dh1:317:26"
+    if ":" in rack_loc and "." not in rack_loc:
+        colon_parts = rack_loc.split(":")
+        if len(colon_parts) >= 3:
+            site_code = colon_parts[0]
+            dh = colon_parts[1].upper()  # "dh1" → "DH1"
+            try:
+                rack_num = int(colon_parts[2])
+            except ValueError:
+                return None
+            ru_num = colon_parts[3] if len(colon_parts) > 3 else None
+            return {"site_code": site_code, "dh": dh, "rack": rack_num, "ru": ru_num}
+
     parts = rack_loc.split(".")
     if len(parts) < 3:
         return None

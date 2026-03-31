@@ -344,7 +344,8 @@ def _rich_print_queue_table(issues: list, title: str = "", page_info: str = ""):
 
         rack_loc = _safe(f.get("customfield_10207"), "")
         hostname = _safe(f.get("customfield_10192"), "")
-        rack_m   = re.search(r"\.R(\d+)\.", rack_loc)
+        # Handle dot format (US-EVI01.DH1.R317.RU26) and colon format (US-EVI01:dh1:317:26)
+        rack_m   = re.search(r"\.R(\d+)(?:\.|$)", rack_loc) or re.search(r":(\d+)(?::|$)", rack_loc)
         node_m   = re.search(r"-node-(\d+)", hostname)
         loc_parts = []
         if rack_m:

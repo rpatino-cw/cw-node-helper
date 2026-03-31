@@ -620,7 +620,7 @@ def _handle_rack_view(ctx: dict, email: str, token: str) -> str | None:
 
 
 
-def _draw_mini_dh_map(rack_loc: str):
+def _draw_mini_dh_map(rack_loc: str, site: str = ""):
     """Draw a miniature data hall map with per-dash rack display and walking route.
 
     Uses saved DH layout config when available, falls back to built-in DH1
@@ -643,8 +643,10 @@ def _draw_mini_dh_map(rack_loc: str):
         s in site_code.upper() for s in _supported
     )
 
-    # --- Resolve layout: saved config > built-in DH1 > offer setup ---
+    # --- Resolve layout: saved config > site alias fallback > built-in DH1 > offer setup ---
     layout = _get_dh_layout(site_code, dh)
+    if layout is None and site and site != site_code:
+        layout = _get_dh_layout(site, dh)
 
     if layout is None:
         # Built-in fallback for DH1 at supported sites (set via SUPPORTED_SITES env var)
