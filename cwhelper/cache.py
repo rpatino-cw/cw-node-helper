@@ -124,8 +124,10 @@ def _cache_put(cache: dict, key: str, value, max_size: int):
 def _request_with_retry(method, *args, retries: int = 2, **kwargs):
     """Call a requests method with simple retry on transient errors.
 
-    Retries on connection errors and 5xx server errors only.
+    Retries on connection errors, SSL errors, and 5xx server errors.
     Uses 1s, 2s backoff between attempts.
+    On final failure for network/SSL errors, prints a friendly message
+    instead of raising a raw traceback.
     """
     import requests
     last_exc = None
@@ -135,6 +137,15 @@ def _request_with_retry(method, *args, retries: int = 2, **kwargs):
             if resp.status_code < 500 or attempt == retries:
                 return resp
             # 5xx — retry
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt == retries:
+                url = args[0] if args else kwargs.get("url", "unknown")
+                host = url.split("/")[2] if isinstance(url, str) and "/" in url else str(url)
+                print(f"\n  \033[33m⚠  Network error reaching {host}\033[0m")
+                print(f"     {type(exc).__name__}: {_short_exc(exc)}")
+                print(f"     Check VPN/Teleport and retry.\n")
+                raise SystemExit(1)
         except requests.RequestException as exc:
             last_exc = exc
             if attempt == retries:
@@ -142,6 +153,20 @@ def _request_with_retry(method, *args, retries: int = 2, **kwargs):
         time.sleep(min(attempt + 1, 3))
     if last_exc:
         raise last_exc
+
+
+def _short_exc(exc) -> str:
+    """Extract a one-line summary from a nested requests exception."""
+    msg = str(exc)
+    if "SSL" in msg:
+        return "SSL handshake failed — server closed connection unexpectedly"
+    if "Max retries" in msg:
+        # dig into the reason
+        reason = getattr(exc, "args", [None])
+        inner = reason[0] if reason else exc
+        if hasattr(inner, "reason"):
+            return str(inner.reason)
+    return msg[:120]
 
 
 def _brief_pause(seconds: float = 0.3):

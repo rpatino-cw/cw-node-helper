@@ -10,7 +10,7 @@ import sys
 from cwhelper import config as _cfg
 from cwhelper.config import *  # noqa: F401,F403
 __all__ = ['main', '_print_cli_help', '_cli_queue', '_cli_history', '_cli_watch', '_cli_weekend_assign', '_cli_verify', '_cli_ibtrace', '_cli_lookup']
-from cwhelper.clients.jira import _get_credentials
+from cwhelper.clients.jira import _get_credentials, _jira_health_check
 from cwhelper.state import _load_user_state
 from cwhelper.services.context import _build_context, _format_age, get_node_context
 from cwhelper.services.search import _search_queue
@@ -25,12 +25,25 @@ from cwhelper.services.learn import _run_learn_mode
 
 
 
+def _preflight_check():
+    """Verify Jira connectivity before entering interactive mode."""
+    try:
+        email, token = _get_credentials()
+    except SystemExit:
+        return  # credentials missing — _get_credentials already printed the error
+    if not _jira_health_check(email, token):
+        print(f"\n  \033[33m⚠  Cannot reach Jira (coreweave.atlassian.net)\033[0m")
+        print(f"     Check VPN/Teleport connection and retry.")
+        print(f"     Starting in offline mode — some features will fail.\n")
+
+
 def main():
     """Dispatch: no args = interactive menu, with args = one-shot mode."""
     raw_args = sys.argv[1:]
 
     # No arguments at all → launch interactive menu
     if not raw_args:
+        _preflight_check()
         _interactive_menu()
         return
 

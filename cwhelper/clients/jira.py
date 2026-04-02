@@ -8,7 +8,7 @@ import sys
 
 from cwhelper import config as _cfg
 from cwhelper.cache import _cache_put, _request_with_retry
-__all__ = ['_get_env_or_exit', '_get_credentials', '_jira_get', '_jira_post', '_jira_put', '_get_my_account_id', '_get_first_name', '_post_comment', '_upload_attachment', '_grab_ticket', '_assign_ticket', '_jira_link_issues', '_get_existing_links', '_is_mine', '_text_to_adf', '_fetch_transitions', '_find_transition', '_execute_transition', '_handle_response_errors', '_jira_get_issue', '_refresh_ctx', '_fetch_site_teammates', '_jira_user_search']
+__all__ = ['_get_env_or_exit', '_get_credentials', '_jira_health_check', '_jira_get', '_jira_post', '_jira_put', '_get_my_account_id', '_get_first_name', '_post_comment', '_upload_attachment', '_grab_ticket', '_assign_ticket', '_jira_link_issues', '_get_existing_links', '_is_mine', '_text_to_adf', '_fetch_transitions', '_find_transition', '_execute_transition', '_handle_response_errors', '_jira_get_issue', '_refresh_ctx', '_fetch_site_teammates', '_jira_user_search']
 
 
 
@@ -33,6 +33,23 @@ def _get_env_or_exit(var_name: str) -> str:
 def _get_credentials() -> tuple:
     """Return (email, token) from env vars."""
     return _get_env_or_exit("JIRA_EMAIL"), _get_env_or_exit("JIRA_API_TOKEN")
+
+
+def _jira_health_check(email: str, token: str) -> bool:
+    """Quick ping to Jira to verify connectivity. Returns True if reachable."""
+    import requests
+    try:
+        resp = _cfg._session.get(
+            f"{_cfg.JIRA_BASE_URL}/rest/api/3/myself",
+            auth=(email, token),
+            headers={"Accept": "application/json"},
+            timeout=(3, 5),
+        )
+        return resp.status_code < 400
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+        return False
+    except requests.RequestException:
+        return False
 
 
 # ---------------------------------------------------------------------------

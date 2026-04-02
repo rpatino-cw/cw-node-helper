@@ -31,12 +31,13 @@ except ImportError:
     _post_comment = None  # type: ignore[assignment]
     _upload_attachment = None  # type: ignore[assignment]
 try:
-    from cwhelper.clients.gsheets import _get_rma_data, _rma_available, _rma_file_age, _rma_file_age_secs
+    from cwhelper.clients.gsheets import _get_rma_data, _rma_available, _rma_file_age, _rma_file_age_secs, _find_latest_file
 except ImportError:
     _get_rma_data = None  # type: ignore[assignment]
     _rma_available = lambda: False
     _rma_file_age = lambda: "?"
     _rma_file_age_secs = lambda: -1
+    _find_latest_file = lambda: None  # type: ignore[assignment]
 try:
     from cwhelper.clients.teleport import _tsh_available
 except ImportError:
@@ -933,95 +934,12 @@ def _walkthrough_pick_template() -> tuple[str, str] | None:
 
 # ── Jira comment helper ───────────────────────────────────────────────────────
 
-def _walkthrough_post_jira_comment(dev_name: str, note_text: str,
-                                    email: str, token: str) -> str | None:
-    """Search for a Jira ticket by device name and post a walkthrough comment."""
-    if not _search_node_history or not _post_comment:
-        print(f"  {DIM}Jira integration unavailable.{RESET}")
-        return None
-
-    print(f"  {DIM}Searching Jira for {dev_name}...{RESET}", end="", flush=True)
-    issues = _search_node_history(dev_name, email, token, limit=5)
-    print(f"\r{'':60}\r", end="")
-
-    if not issues:
-        print(f"  {DIM}No tickets found for {dev_name}.{RESET}")
-        return None
-
-    print(f"\n  {BOLD}Tickets for {dev_name}:{RESET}\n")
-    for i, iss in enumerate(issues[:5], start=1):
-        key     = iss.get("key", "?")
-        summary = (iss.get("fields", {}).get("summary") or "")[:55]
-        status  = ((iss.get("fields", {}).get("status") or {}).get("name") or "?")
-        print(f"    {BOLD}{i}{RESET}. {CYAN}{key}{RESET}  {DIM}[{status}]{RESET}  {summary}")
-
-    try:
-        pick = input(f"\n  Comment on # (ENTER to skip): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
-    if not pick:
-        return None
-
-    try:
-        idx = int(pick)
-        if idx < 1 or idx > len(issues[:5]):
-            return None
-        key = issues[idx - 1].get("key", "")
-    except ValueError:
-        return None
-
-    ts   = datetime.now(timezone.utc).strftime(_DISPLAY_FMT)
-    body = f"[Walkthrough] {note_text}\n\nDevice: {dev_name}\nTime: {ts}"
-    ok = _post_comment(key, body, email, token)
-    if ok:
-        return key
-    print(f"  {DIM}Comment post failed.{RESET}")
-    return None
-
 
 # ── Full annotation flow ──────────────────────────────────────────────────────
 
 _TERMINAL_STATUSES = {"closed", "done", "resolved", "rma", "rma engaged",
                       "won't do", "wont do", "cancelled", "canceled"}
 
-
-def _walkthrough_attach_photo(jira_key: str, email: str, token: str) -> bool:
-    """Prompt to attach a clipboard screenshot to a Jira ticket.
-
-    Returns True if a photo was successfully attached.
-    """
-    if not _upload_attachment or not jira_key or not email or not token:
-        return False
-    try:
-        raw = input(f"\n  Attach photo to {jira_key}? [y/N]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    if raw != "y":
-        return False
-
-    tmp_path = os.path.join(tempfile.gettempdir(), f"{jira_key}_walkthrough.png")
-    print(f"  {DIM}Reading clipboard image...{RESET}", end="", flush=True)
-    result = subprocess.run(["pngpaste", tmp_path], capture_output=True)
-    if result.returncode != 0:
-        print(f"\r  {YELLOW}No image in clipboard.{RESET}  "
-              f"{DIM}Copy a photo first (iPhone → AirDrop or Cmd+Shift+4), then try again.{RESET}")
-        return False
-    print(f"\r  {DIM}Uploading to {jira_key}...{RESET}                    ", end="", flush=True)
-    if _upload_attachment(jira_key, tmp_path, email, token):
-        print(f"\r  {GREEN}✓ Photo attached to {jira_key}{RESET}                    ")
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        return True
-    else:
-        print(f"\r  {YELLOW}Upload failed. Check Jira permissions.{RESET}          ")
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        return False
 
 
 def _walkthrough_annotate_full(dev: dict, rack_label: str,
@@ -1132,29 +1050,13 @@ def _walkthrough_annotate_full(dev: dict, rack_label: str,
         top_status = ((top.get("fields", {}).get("status") or {}).get("name") or "?")
 
         if all_closed:
-            print(f"\n  {DIM}Jira: {top_key} [{top_status}] — all tickets closed, skipping{RESET}")
+            print(f"\n  {DIM}Jira: {top_key} [{top_status}] — all tickets closed{RESET}")
         else:
             print(f"\n  {DIM}Jira:{RESET}  {CYAN}{BOLD}{top_key}{RESET}  "
                   f"{DIM}[{top_status}]{RESET}  {top_sum}")
             if len(prefetched_issues) > 1:
                 print(f"  {DIM}  + {len(prefetched_issues) - 1} more ticket(s){RESET}")
-
-            try:
-                raw = input(f"\n  Comment on {top_key}? [y/n/?]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                raw = "n"
-
-            if raw == "y":
-                ts   = datetime.now(timezone.utc).strftime(_DISPLAY_FMT)
-                body = f"[Walkthrough] {note_text}\n\nDevice: {dev_name}\nTime: {ts}"
-                if _post_comment(top_key, body, email, token):
-                    jira_key = top_key
-                    print(f"  {GREEN}✓ Commented on {top_key}{RESET}")
-                else:
-                    print(f"  {DIM}Comment failed.{RESET}")
-            elif raw == "?":
-                # Show full list and let them pick
-                jira_key = _walkthrough_post_jira_comment(dev_name, note_text, email, token)
+            jira_key = top_key
 
     # Capture RMA ticket number if this device has one
     rma_ticket = None
@@ -1206,130 +1108,18 @@ def _walkthrough_build_report(notes: list, session: dict,
     dh       = session.get("dh", "?")
     tech     = session.get("tech", "")
 
+    header = f"Site: {site}  DH: {dh}"
+    zone = session.get("zone")
+    if zone:
+        header += f"  Zone: {zone}"
+
     lines = [
         "WALKTHROUGH REPORT",
         "=" * 60,
-        f"Site: {site}  DH: {dh}" + (f"  Tech: {tech}" if tech else ""),
-    ]
-    zone = session.get("zone")
-    if zone:
-        lines[-1] += f"  Zone: {zone}"
-    lines += [
-        f"Notes: {len(notes)}",
+        header,
         "=" * 60,
         "",
     ]
-
-    # Issue type summary
-    if notes:
-        type_counts: dict[str, int] = {}
-        for n in notes:
-            t = n.get("issue_type") or "Other"
-            type_counts[t] = type_counts.get(t, 0) + 1
-        lines.append("ISSUE SUMMARY")
-        lines.append("─" * 40)
-        for itype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            lines.append(f"  {itype:<32}  {count}×")
-        lines.append("")
-
-    # Checklist section
-    if checklist:
-        lines.append("PRE-SHIFT CHECKLIST")
-        lines.append("─" * 40)
-        for key, data in checklist.items():
-            unit = f"  Unit: {data['unit']}" if data.get("unit") else ""
-            lines.append(f"  {data['label']:<46}  {data['answer']}{unit}")
-        lines.append("")
-
-    # Carryover section
-    if carryover:
-        lines.append("CARRYOVER FROM PREVIOUS WALKTHROUGH")
-        lines.append("─" * 40)
-        by_status: dict[str, list] = {}
-        for c in carryover:
-            by_status.setdefault(c.get("status", "pending"), []).append(c)
-
-        for status in ("resolved", "persistent", "worsened", "pending", "skipped"):
-            items = by_status.get(status, [])
-            if not items:
-                continue
-            status_label = status.upper()
-            for c in items:
-                fn = f"  → {c['followup_note']}" if c.get("followup_note") else ""
-                lines.append(f"  [{status_label}]  {c.get('rack', '?')}  {c['original_note']}{fn}")
-        lines.append("")
-
-    # RMA verification summary
-    if rma_by_rack:
-        verified = []
-        not_checked = []
-        for rack, items in sorted(rma_by_rack.items()):
-            for rma in items:
-                ws = rma.get("walkthrough_status")
-                node = rma.get("node_name", "?")
-                if ws:
-                    verified.append(f"  {rack:<8}  {node:<36}  {ws}")
-                else:
-                    not_checked.append(f"  {rack:<8}  {node:<36}  not checked")
-        if verified or not_checked:
-            lines.append("RMA VERIFICATION")
-            lines.append("─" * 40)
-            for v in verified:
-                lines.append(v)
-            for nc in not_checked:
-                lines.append(nc)
-            lines.append("")
-
-    # Needs follow-up — ongoing items surfaced before per-rack detail
-    ongoing = [n for n in notes if "[ONGOING]" in n.get("note", "")]
-    if ongoing:
-        lines.append("NEEDS FOLLOW-UP  (ongoing from previous shift)")
-        lines.append("─" * 40)
-        for n in ongoing:
-            rack   = n.get("rack", "?")
-            device = n.get("device_name", "?")
-            issue  = n.get("issue_type") or n.get("note", "?")
-            detail = n.get("note", "")
-            lines.append(f"  {rack:<8}  {device}")
-            lines.append(f"           {issue}")
-            if detail and detail != issue:
-                lines.append(f"           {detail}")
-            tickets = []
-            if n.get("jira_key"):
-                tickets.append(n["jira_key"])
-            if n.get("rma_ticket"):
-                tickets.append(n["rma_ticket"])
-            if tickets:
-                lines.append(f"           Ticket: {', '.join(tickets)}")
-        lines.append("")
-
-    # New annotations grouped by rack
-    if notes:
-        lines.append("TODAY'S ANNOTATIONS")
-        lines.append("─" * 40)
-        by_rack: dict[str, list] = {}
-        for n in notes:
-            by_rack.setdefault(n.get("rack", "?"), []).append(n)
-
-        for rack, rack_notes in sorted(by_rack.items()):
-            lines.append(f"\nRACK {rack}")
-            for n in rack_notes:
-                issue  = n.get("issue_type") or n.get("note", "?")
-                detail = n.get("note", "")
-                sheet_tag = "  ⟵ ON SHEET" if n.get("on_sheet") else ""
-                # Build ticket string
-                tickets = []
-                if n.get("jira_key"):
-                    tickets.append(_normalize_ticket_key(n["jira_key"]))
-                if n.get("rma_ticket"):
-                    tickets.append(_normalize_ticket_key(n["rma_ticket"]))
-                seen = set()
-                tickets = [t for t in tickets if t and t not in seen and not seen.add(t)]
-                tkt_str = f"  {', '.join(tickets)}" if tickets else ""
-                lines.append(f"  RU{n.get('ru', '?'):>3}  {n.get('device_name', '?')}  [{n.get('status', '?')}]  {issue}{tkt_str}{sheet_tag}")
-                if detail and detail != issue:
-                    lines.append(f"        {detail}")
-        lines.append("")
 
     # Add to sheet — new issues not yet tracked
     new_for_sheet = [n for n in notes if not n.get("on_sheet")]
@@ -2682,6 +2472,34 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                     print(f"  {DIM}Enter a device number, r for rack note, or ENTER to go back.{RESET}")
                     time.sleep(0.8)
                     continue
+
+                # ── Show device info before annotation ──
+                _dev_name = dev.get("name") or dev.get("display") or "?"
+                _dev_serial = dev.get("serial") or ""
+                _dev_status = (dev.get("status") or {}).get("label", "?")
+                _dev_role = (dev.get("device_role") or {}).get("name", "")
+                _dev_type = (dev.get("device_type") or {}).get("display", "")
+                _dev_ip4 = (dev.get("primary_ip4") or {}).get("address", "")
+                _dev_ip6 = (dev.get("primary_ip6") or {}).get("address", "")
+                _dev_ip = _dev_ip4 or _dev_ip6 or (dev.get("primary_ip") or {}).get("address", "")
+                _dev_tenant = (dev.get("tenant") or {}).get("name", "")
+                _dev_pos = dev.get("position")
+                _dev_pos_s = str(int(_dev_pos)) if isinstance(_dev_pos, (int, float)) else str(_dev_pos or "?")
+                print(f"\n  {BOLD}{_dev_name}{RESET}  {DIM}[{_dev_status}]{RESET}")
+                info_parts = []
+                if _dev_type:
+                    info_parts.append(f"Type: {_dev_type}")
+                if _dev_serial:
+                    info_parts.append(f"S/N: {_dev_serial}")
+                if _dev_ip:
+                    info_parts.append(f"IP: {_dev_ip}")
+                if _dev_role:
+                    info_parts.append(f"Role: {_dev_role}")
+                if _dev_tenant:
+                    info_parts.append(f"Tenant: {_dev_tenant}")
+                info_parts.append(f"RU: {_dev_pos_s}")
+                print(f"  {DIM}{'  ·  '.join(info_parts)}{RESET}")
+
                 annotation = _walkthrough_annotate_full(dev, rack_label, email, token,
                                                          rack_carryover=rack_carryover,
                                                          dev_hist=_dev_hist_map.get(
@@ -2698,17 +2516,6 @@ def _walkthrough_mode(state: dict, email: str, token: str) -> dict:
                 state["walkthrough_carryover"] = carryover
                 _walkthrough_save_notes(state, notes, session)
 
-                # Offer photo attach — skip entirely for on-sheet nodes
-                if not annotation.get("on_sheet"):
-                    photo_key = annotation.get("jira_key") or ""
-                    if not photo_key and email and token:
-                        try:
-                            typed = input(f"\n  Attach photo? Enter ticket key (or ENTER to skip): ").strip().upper()
-                        except (EOFError, KeyboardInterrupt):
-                            typed = ""
-                        photo_key = typed
-                    if photo_key:
-                        _walkthrough_attach_photo(photo_key, email, token)
 
             try:
                 more = input(f"\n  Annotate another device in {rack_label}? [y/N]: ").strip().lower()
