@@ -424,7 +424,7 @@ _DEFAULT_STATE = {
 # Only "ticket_lookup" starts enabled — all others disabled until tested.
 
 _FEATURE_REGISTRY = {
-    "ticket_lookup":   {"label": "Ticket lookup",              "cli_cmd": None,             "menu_keys": ["1"],      "deps": ["jira", "netbox"], "default": True},
+    "ticket_lookup":   {"label": "Ticket lookup",              "cli_cmd": None,             "menu_keys": [],         "deps": ["jira", "netbox"], "default": True},
     "queue":           {"label": "Queue browser",              "cli_cmd": "queue",          "menu_keys": ["2"],      "deps": ["jira"],           "default": False},
     "my_tickets":      {"label": "My tickets",                 "cli_cmd": None,             "menu_keys": ["3"],      "deps": ["jira"],           "default": False},
     "node_history":    {"label": "Node history",               "cli_cmd": "history",        "menu_keys": [],         "deps": ["jira"],           "default": False},

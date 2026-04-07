@@ -159,7 +159,8 @@ def _interactive_menu():
         print(f"  {DIM}You're all set — credentials verified.{RESET}")
         print(f"  {DIM}Currently {GREEN}{_n_enabled}/{_n_total}{RESET}{DIM} features are enabled.{RESET}\n")
         print(f"  Quick start:")
-        print(f"    {BOLD}1{RESET}  Look up a ticket     → type a ticket key like {CYAN}DO-12345{RESET}")
+        print(f"    Type a ticket key like {CYAN}DO-12345{RESET} to look it up")
+        print(f"    Type a service tag or hostname to search")
         print(f"    {BOLD}s{RESET}  Open settings         → enable more features as you go")
         print(f"    {BOLD}q{RESET}  Quit\n")
         print(f"  {DIM}Enable features one at a time with:{RESET}")
@@ -252,7 +253,6 @@ def _interactive_menu():
                else ("4", "Watch queue", "grab tickets live")
 
         _all_options = [
-            ("1",  "Lookup",       "ticket key, service tag, or hostname"),
             ("2",  "Browse queue", "DO · HO · SDA"),
             ("3",  "My tickets",   ""),
             opt4,
@@ -331,7 +331,7 @@ def _interactive_menu():
             else:
                 watcher_hint = f"\n  {DIM}Watching... press ENTER to refresh{RESET}"
         try:
-            _raw_choice = input(f"  Select [0-6, b]{bm_hint}, ticket key, or q: {watcher_hint}").strip()
+            _raw_choice = input(f"  Enter ticket/tag/hostname, menu option, or q: {watcher_hint}").strip()
             choice = _raw_choice.lower()
         except (EOFError, KeyboardInterrupt):
             _stop_background_watcher()
@@ -390,14 +390,6 @@ def _interactive_menu():
                 return
             continue
 
-        # --- Direct ticket key at main menu (e.g. DO-12345) --------------
-        if JIRA_KEY_PATTERN.match(choice.upper()) and _cfg._is_feature_enabled("ticket_lookup"):
-            _act, state = _open_ticket(choice.upper(), email, token, state)
-            if _act == "quit":
-                print(f"\n  {DIM}Goodbye.{RESET}\n")
-                return
-            continue
-
         # --- Bookmark shortcuts (a-e) ------------------------------------
         if choice in bm_keys and (_bm_idx := bm_keys.index(choice)) < len(bookmarks):
             bm = bookmarks[_bm_idx]
@@ -432,177 +424,6 @@ def _interactive_menu():
             from cwhelper.tui.settings import _settings_page
             state = _settings_page(state)
             continue
-
-        # --- 1: Smart lookup — ticket key OR service tag / hostname ----------
-        if choice == "1" and _cfg._is_feature_enabled("ticket_lookup"):
-            recent_tickets = list(state.get("recent_tickets", []))
-            recent_nodes   = list(state.get("recent_nodes", []))
-            _fetched_issues: list = []
-
-            # Single API fetch to backfill both lists if either is thin
-            if len(recent_tickets) < 3 or len(recent_nodes) < 3:
-                print(f"\n  {DIM}Loading recent...{RESET}", end="", flush=True)
-                try:
-                    _futs = [
-                        _executor.submit(_search_queue, "", email, token,
-                                         mine_only=True, limit=10, status_filter="all", project=p)
-                        for p in ("DO", "HO", "SDA")
-                    ]
-                    _fetched_issues = []
-                    for _f in _futs:
-                        try:
-                            _fetched_issues += _f.result()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                print(f"\r{'':60}\r", end="")
-
-            # Backfill tickets
-            if len(recent_tickets) < 3 and _fetched_issues:
-                seen_t = {r["key"] for r in recent_tickets}
-                for iss in sorted(_fetched_issues, key=lambda x: x.get("key", ""), reverse=True):
-                    if len(recent_tickets) >= 3:
-                        break
-                    k = iss["key"]
-                    if k not in seen_t:
-                        seen_t.add(k)
-                        f_ = iss.get("fields", {})
-                        entry = {"key": k, "summary": f_.get("summary", "")[:80], "_backfill": True}
-                        assignee_obj = f_.get("assignee")
-                        if assignee_obj:
-                            entry["assignee"] = assignee_obj.get("displayName")
-                        if f_.get("updated"):
-                            entry["updated"] = f_["updated"]
-                        recent_tickets.append(entry)
-
-            # Backfill nodes
-            if len(recent_nodes) < 3 and _fetched_issues:
-                seen_n = {n["term"].lower() for n in recent_nodes}
-                for iss in _fetched_issues:
-                    if len(recent_nodes) >= 3:
-                        break
-                    f = iss.get("fields", {})
-                    tag = _unwrap_field(f.get("customfield_10193"))
-                    if tag and tag.lower() not in seen_n:
-                        seen_n.add(tag.lower())
-                        entry = {"term": tag, "_backfill": True}
-                        hn   = _unwrap_field(f.get("customfield_10192")) or ""
-                        site = _unwrap_field(f.get("customfield_10194")) or ""
-                        if hn:
-                            entry["hostname"] = hn
-                        if site:
-                            entry["site"] = site
-                        entry["last_ticket"] = iss.get("key", "")
-                        recent_nodes.append(entry)
-
-            # Build combined numbered list (tickets first, then nodes)
-            t_slice = recent_tickets[:3]
-            n_slice = recent_nodes[:3]
-            combined = (
-                [{"type": "ticket", "data": r} for r in t_slice] +
-                [{"type": "node",   "data": n} for n in n_slice]
-            )
-
-            if t_slice:
-                print(f"\n  {DIM}Recent tickets:{RESET}")
-                for i, r in enumerate(t_slice, 1):
-                    label = r.get("summary", "")[:38]
-                    assignee = r.get("assignee")
-                    asgn_str = (f" {CYAN}{assignee.split()[0]}{RESET}" if assignee
-                                else f" {RED}unassigned{RESET}")
-                    upd = r.get("updated", "")
-                    upd_str = (f" {DIM}upd {_format_age(_parse_jira_timestamp(upd))}{RESET}"
-                               if upd else "")
-                    print(f"    {BOLD}{i}{RESET}. {r['key']}  {DIM}{label}{RESET}{asgn_str}{upd_str}")
-
-            if n_slice:
-                print(f"\n  {DIM}Recent nodes:{RESET}")
-                for i, n in enumerate(n_slice, len(t_slice) + 1):
-                    extras = []
-                    if n.get("hostname"):
-                        extras.append(n["hostname"])
-                    if n.get("site"):
-                        extras.append(n["site"])
-                    if n.get("last_ticket"):
-                        extras.append(n["last_ticket"])
-                    extra_str = f"  {DIM}{' │ '.join(extras)}{RESET}" if extras else ""
-                    print(f"    {BOLD}{i}{RESET}. {n['term']}{extra_str}")
-
-            print()
-
-            try:
-                prompt = "  Enter ticket key, service tag, hostname, or rack (e.g. R262)"
-                if combined:
-                    prompt += f", pick [1-{len(combined)}]"
-                prompt += ", or ENTER to go back: "
-                raw = input(prompt).strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-
-            if not raw or raw.lower() in ("b", "back"):
-                continue
-
-            # Route: number → combined list; Jira key → ticket; else → node
-            chosen = None
-            try:
-                idx = int(raw)
-                if 1 <= idx <= len(combined):
-                    chosen = combined[idx - 1]
-            except ValueError:
-                pass
-
-            if chosen and chosen["type"] == "ticket":
-                _act, state = _open_ticket(chosen["data"]["key"], email, token, state)
-                if _act == "quit":
-                    print(f"\n  {DIM}Goodbye.{RESET}\n")
-                    return
-            elif chosen and chosen["type"] == "node":
-                term = chosen["data"]["term"]
-                state = _record_node_lookup(state, term)
-                _save_user_state(state)
-                action = _run_history_interactive(email, token, term)
-                if action == "quit":
-                    print(f"\n  {DIM}Goodbye.{RESET}\n")
-                    return
-            elif JIRA_KEY_PATTERN.match(raw.upper()):
-                _act, state = _open_ticket(raw.upper(), email, token, state)
-                if _act == "quit":
-                    print(f"\n  {DIM}Goodbye.{RESET}\n")
-                    return
-            elif re.match(r'^R?\d{1,4}$', raw, re.IGNORECASE):
-                # Rack number lookup → Cab View
-                _recent_nodes = state.get("recent_nodes", [])
-                site = next((n.get("site", "") for n in _recent_nodes if n.get("site")), "")
-                ctx = _run_cab_view(raw, site, email, token)
-                if ctx:
-                    state = _record_ticket_view(state, ctx["issue_key"], ctx.get("summary", ""),
-                                               assignee=ctx.get("assignee"), updated=ctx.get("updated"))
-                    _save_user_state(state)
-                    action = _post_detail_prompt(ctx, email, token, state=state)
-                    if action == "quit":
-                        print(f"\n  {DIM}Goodbye.{RESET}\n")
-                        return
-            else:
-                term = raw
-                _node_hn, _node_site, _node_ticket = None, None, None
-                try:
-                    _node_issues = _search_node_history(term, email, token, limit=1)
-                    if _node_issues:
-                        _nf = _node_issues[0].get("fields", {})
-                        _node_hn     = _unwrap_field(_nf.get("customfield_10192")) or None
-                        _node_site   = _unwrap_field(_nf.get("customfield_10194")) or None
-                        _node_ticket = _node_issues[0].get("key")
-                except Exception:
-                    pass
-                state = _record_node_lookup(state, term,
-                                            hostname=_node_hn, last_ticket=_node_ticket, site=_node_site)
-                _save_user_state(state)
-                action = _run_history_interactive(email, token, term)
-                if action == "quit":
-                    print(f"\n  {DIM}Goodbye.{RESET}\n")
-                    return
 
         # --- 2: Browse queue (DO, HO, or SDA) --------------------------------
         elif choice == "2" and _cfg._is_feature_enabled("queue"):
@@ -1016,7 +837,58 @@ def _interactive_menu():
             _clear_screen()
 
         else:
-            # AI default-on: route unrecognized input to AI chat
+            # --- Smart lookup: ticket key, service tag, hostname, rack --------
+            # Anything typed at the prompt that isn't a menu key gets routed here.
+            _input = _raw_choice.strip()
+            if not _input:
+                continue
+
+            if _cfg._is_feature_enabled("ticket_lookup"):
+                # Jira ticket key (DO-12345, HO-67890)
+                if JIRA_KEY_PATTERN.match(_input.upper()):
+                    _act, state = _open_ticket(_input.upper(), email, token, state)
+                    if _act == "quit":
+                        print(f"\n  {DIM}Goodbye.{RESET}\n")
+                        return
+                    continue
+
+                # Rack number (R262, 262)
+                if re.match(r'^R?\d{1,4}$', _input, re.IGNORECASE):
+                    _recent_nodes = state.get("recent_nodes", [])
+                    site = next((n.get("site", "") for n in _recent_nodes if n.get("site")), "")
+                    ctx = _run_cab_view(_input, site, email, token)
+                    if ctx:
+                        state = _record_ticket_view(state, ctx["issue_key"], ctx.get("summary", ""),
+                                                   assignee=ctx.get("assignee"), updated=ctx.get("updated"))
+                        _save_user_state(state)
+                        action = _post_detail_prompt(ctx, email, token, state=state)
+                        if action == "quit":
+                            print(f"\n  {DIM}Goodbye.{RESET}\n")
+                            return
+                    continue
+
+                # Service tag, hostname, or other identifier → node history search
+                if len(_input) >= 4:
+                    _node_hn, _node_site, _node_ticket = None, None, None
+                    try:
+                        _node_issues = _search_node_history(_input, email, token, limit=1)
+                        if _node_issues:
+                            _nf = _node_issues[0].get("fields", {})
+                            _node_hn     = _unwrap_field(_nf.get("customfield_10192")) or None
+                            _node_site   = _unwrap_field(_nf.get("customfield_10194")) or None
+                            _node_ticket = _node_issues[0].get("key")
+                    except Exception:
+                        pass
+                    state = _record_node_lookup(state, _input,
+                                                hostname=_node_hn, last_ticket=_node_ticket, site=_node_site)
+                    _save_user_state(state)
+                    action = _run_history_interactive(email, token, _input)
+                    if action == "quit":
+                        print(f"\n  {DIM}Goodbye.{RESET}\n")
+                        return
+                    continue
+
+            # AI fallback: route unrecognized input to AI chat
             if _AI_ENABLED and ai_available and _cfg._is_feature_enabled("ai_chat") and len(choice) > 1:
                 found_key = _ai_dispatch(email=email, token=token, initial_msg=choice)
                 if found_key and JIRA_KEY_PATTERN.match(found_key):
@@ -1025,4 +897,5 @@ def _interactive_menu():
                         print(f"\n  {DIM}Goodbye.{RESET}\n")
                         return
             else:
-                print(f"\n  {DIM}Invalid choice. Try 1-6, ?, or q.{RESET}")
+                print(f"\n  {DIM}Unrecognized input. Type a ticket key (DO-12345), service tag, or hostname.{RESET}")
+                _brief_pause(1.5)

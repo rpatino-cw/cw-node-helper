@@ -1619,9 +1619,9 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertFalse(_cfg._is_feature_enabled("nonexistent_feature"))
 
     def test_enabled_menu_keys(self):
-        # Only ticket_lookup is on by default
+        # Only ticket_lookup is on by default, but it has no menu key (inline)
         keys = _cfg._enabled_menu_keys()
-        self.assertIn("1", keys)       # ticket_lookup menu key
+        self.assertNotIn("1", keys)    # ticket_lookup has no menu key
         self.assertNotIn("2", keys)    # queue disabled
         self.assertNotIn("L", keys)    # learn disabled
 
@@ -1629,26 +1629,25 @@ class TestFeatureFlags(unittest.TestCase):
         _cfg.FEATURES["queue"] = True
         _cfg.FEATURES["learn"] = True
         keys = _cfg._enabled_menu_keys()
-        self.assertIn("1", keys)
         self.assertIn("2", keys)
         self.assertIn("L", keys)
 
     def test_menu_options_filtered(self):
         """Disabled features are excluded from menu options list."""
         options = [
-            ("1",  "Lookup",       "hint"),
             ("2",  "Browse queue", "hint"),
+            ("3",  "My tickets",   "hint"),
             ("",   "",             ""),
             ("L",  "Learn",        "hint"),
         ]
-        # Only ticket_lookup enabled
-        _cfg.FEATURES["queue"] = False
+        _cfg.FEATURES["queue"] = True
+        _cfg.FEATURES["my_tickets"] = False
         _cfg.FEATURES["learn"] = False
         emk = _cfg._enabled_menu_keys()
         filtered = [o for o in options if not o[0].strip() or o[0] in emk]
         keys = [o[0] for o in filtered if o[0].strip()]
-        self.assertIn("1", keys)
-        self.assertNotIn("2", keys)
+        self.assertIn("2", keys)
+        self.assertNotIn("3", keys)
         self.assertNotIn("L", keys)
         # Separator preserved
         self.assertIn(("", "", ""), filtered)
