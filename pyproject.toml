@@ -7,7 +7,7 @@ name = "cw-node-helper"
 version = "6.5.0"
 description = "DCT terminal companion — Jira + NetBox + Grafana queue browser"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.28.0", "rich>=13.0.0"]
+dependencies = ["requests>=2.28.0", "rich>=13.0.0", "textual>=0.50.0"]
 license = {text = "MIT"}
 
 [project.optional-dependencies]
