@@ -272,11 +272,35 @@ def _cli_update():
     import subprocess
     print(f"\n  {BOLD}CW Node Helper — Update{RESET}\n")
 
+    # Find a working remote (prefer HTTPS over SSH)
+    try:
+        remotes = subprocess.run(
+            ["git", "remote", "-v"], cwd=_cfg._PROJECT_ROOT,
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        # Pick first HTTPS remote, fall back to any remote
+        remote_name = "origin"
+        for line in remotes.splitlines():
+            if "(fetch)" in line and "https://" in line:
+                remote_name = line.split()[0]
+                break
+    except Exception:
+        remote_name = "origin"
+
+    # Get current branch
+    try:
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=_cfg._PROJECT_ROOT,
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip() or "main"
+    except Exception:
+        branch = "main"
+
     # git pull
-    print(f"  {DIM}Pulling latest...{RESET}", end="", flush=True)
+    print(f"  {DIM}Pulling latest from {remote_name}/{branch}...{RESET}", end="", flush=True)
     try:
         result = subprocess.run(
-            ["git", "pull", "--ff-only"],
+            ["git", "pull", remote_name, branch, "--ff-only"],
             cwd=_cfg._PROJECT_ROOT,
             capture_output=True, text=True, timeout=30,
         )
