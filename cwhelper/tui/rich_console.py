@@ -447,8 +447,6 @@ def _rich_print_menu(
     ai_enabled: bool = False,
     ai_available: bool = False,
     compact: bool = False,
-    cluster_status: str | None = None,
-    cwctl_available: bool | None = None,
 ):
     """3D-2D minimal menu: no panels, no section labels, structure from whitespace only."""
 
@@ -464,36 +462,6 @@ def _rich_print_menu(
         return t
 
     console.print()
-
-    # Teleport cluster status — silent when unavailable
-    if cluster_status:
-        color = "green" if cluster_status == "online" else "red"
-        t = Text(INDENT)
-        t.append("● ", style=f"bold {color}")
-        t.append("teleport", style="dim")
-        _site_slug = os.environ.get("DEFAULT_SITE_SLUG", "us-site-01a")
-        t.append(f"  {_site_slug}", style="bold white")
-        t.append(f"  {cluster_status}", style=color)
-        console.print(t)
-        console.print()
-
-    # cwctl status — silent when still checking
-    if cwctl_available is not None:
-        if cwctl_available:
-            t = Text(INDENT)
-            t.append("● ", style="bold green")
-            t.append("cwctl", style="dim")
-            t.append("  ready", style="green")
-            console.print(t)
-        else:
-            t = Text(INDENT)
-            t.append("○ ", style="dim")
-            t.append("cwctl", style="dim")
-            t.append("  not found", style="dim red")
-            t.append("  →  ", style="dim")
-            t.append("gh release download -R <org>/cwctl ...", style="dim italic")
-            console.print(t)
-        console.print()
 
     # Stale alert — plain text, no panel
     if stale_count:
@@ -558,6 +526,18 @@ def _rich_print_menu(
         nav.append("ai",   style=ai_style)
         nav.append(f"  {'on' if ai_enabled else 'off'}", style="dim")
     console.print(nav)
+
+    # Feature count hint — show when not all features are enabled
+    from cwhelper.config import FEATURES as _FEATURES
+    _n_on = sum(1 for v in _FEATURES.values() if v)
+    _n_total = len(_FEATURES)
+    if _n_on < _n_total:
+        feat = Text(INDENT)
+        feat.append(f"{_n_on}/{_n_total} features enabled", style="dim")
+        feat.append("  →  ", style="dim")
+        feat.append("s", style="bold")
+        feat.append("  settings", style="dim")
+        console.print(feat)
 
     # Bookmarks
     if shortcuts:

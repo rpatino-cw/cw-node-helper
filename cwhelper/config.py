@@ -46,10 +46,11 @@ __all__ = [
     '_JQL_CACHE_TTL', '_ISSUE_CACHE_MAX', '_NETBOX_CACHE_MAX', '_JQL_CACHE_MAX',
     'HO_RADAR_STATUSES', 'PROCEDURE_KITS',
     'QUEUE_FILTERS', 'STALE_UNASSIGNED_HOURS', '_DEFAULT_STATE',
+    '_FEATURE_REGISTRY', 'FEATURES', '_is_feature_enabled', '_load_features', '_save_features',
     '_HAS_OPENAI', '_openai_mod', '_HAS_PILLOW',
     '_session', '_executor',
     '_issue_cache', '_netbox_cache', '_jql_cache',
-    '_ANIMATE', '_VISUAL_MAPS', '_AI_ENABLED', 'NTFY_TOPIC', '_NTFY_ENABLED', '_FLEET_ENABLED',
+    '_ANIMATE', '_VISUAL_MAPS', '_AI_ENABLED', 'NTFY_TOPIC', '_NTFY_ENABLED',
     '_my_account_id', '_my_display_name', '_relates_link_type',
     '_watcher_thread', '_watcher_stop_event', '_watcher_queue',
     '_watcher_site', '_watcher_project', '_watcher_interval',
@@ -173,7 +174,7 @@ _AI_DOMAIN_KNOWLEDGE = (
     "Created when physical site work is needed. DCTs pick these up.\n"
     "- HO (HPC Ops): Central 'home' ticket for a node's hardware problem, troubleshooting, and RMA history. "
     "All work, logs, and vendor interactions for that asset should live in a single HO. "
-    "Usually auto-created when a node enters triage (cwctl nlcc <nodeId> -s triage -m 'reason'). "
+    "Usually auto-created when a node enters triage. "
     "Can also be manually created when a node only exists in FLCC mgmt (never joined k8s). "
     "Must include: clear issue description, node ID/serial, slot, failed component details, PCI lanes, "
     "serials, and required logs (FD logs, AWX bundles) so FRR/vendor can act without back-and-forth. "
@@ -412,7 +413,66 @@ _DEFAULT_STATE = {
     "walkthrough_carryover": [],
     "walkthrough_checklist": {},
     "walkthrough_history": [],   # rolling list of past session dicts
+    "features": {},              # persisted feature toggles (overrides defaults)
 }
+
+# ---------------------------------------------------------------------------
+# Feature flag registry
+# ---------------------------------------------------------------------------
+# Each feature has: label, cli_cmd (for CLI gating), menu_keys (for TUI gating),
+# deps (informational), default (initial state for new installs).
+# Only "ticket_lookup" starts enabled — all others disabled until tested.
+
+_FEATURE_REGISTRY = {
+    "ticket_lookup":   {"label": "Ticket lookup",              "cli_cmd": None,             "menu_keys": ["1"],      "deps": ["jira", "netbox"], "default": True},
+    "queue":           {"label": "Queue browser",              "cli_cmd": "queue",          "menu_keys": ["2"],      "deps": ["jira"],           "default": False},
+    "my_tickets":      {"label": "My tickets",                 "cli_cmd": None,             "menu_keys": ["3"],      "deps": ["jira"],           "default": False},
+    "node_history":    {"label": "Node history",               "cli_cmd": "history",        "menu_keys": [],         "deps": ["jira"],           "default": False},
+    "shift_brief":     {"label": "Shift brief",               "cli_cmd": "brief",          "menu_keys": ["b"],      "deps": ["jira", "ai"],     "default": False},
+    "verify":          {"label": "Verification flows",         "cli_cmd": "verify",         "menu_keys": [],         "deps": ["jira", "netbox"], "default": False},
+    "watcher":         {"label": "Queue watcher",              "cli_cmd": "watch",          "menu_keys": ["4"],      "deps": ["jira"],           "default": False},
+    "rack_report":     {"label": "Rack report",               "cli_cmd": "rack-report",    "menu_keys": ["r"],      "deps": ["jira"],           "default": False},
+    "ibtrace":         {"label": "IB trace",                   "cli_cmd": "ibtrace",        "menu_keys": [],         "deps": ["ib_topology"],    "default": False},
+    "learn":           {"label": "Code quiz",                  "cli_cmd": "learn",          "menu_keys": ["L"],      "deps": [],                 "default": False},
+    "rack_map":        {"label": "Rack map",                   "cli_cmd": None,             "menu_keys": ["5"],      "deps": ["netbox"],         "default": False},
+    "bookmarks":       {"label": "Bookmarks",                  "cli_cmd": None,             "menu_keys": ["6"],      "deps": ["jira"],           "default": False},
+    "bulk_start":      {"label": "Bulk start tickets",         "cli_cmd": None,             "menu_keys": ["p", "P"], "deps": ["jira"],           "default": False},
+    "activity":        {"label": "Activity log",               "cli_cmd": None,             "menu_keys": ["l"],      "deps": ["jira"],           "default": False},
+    "walkthrough":     {"label": "Walkthrough",                "cli_cmd": None,             "menu_keys": ["w"],      "deps": ["jira", "netbox"], "default": False},
+    "weekend_assign":  {"label": "Weekend auto-assign",        "cli_cmd": "weekend-assign", "menu_keys": [],         "deps": ["jira"],           "default": False},
+    "ai_chat":         {"label": "AI chat / ticket finder",    "cli_cmd": None,             "menu_keys": ["ai"],     "deps": ["ai"],             "default": False},
+}
+
+# Runtime feature state — populated by _load_features() at startup, checked everywhere.
+FEATURES: dict[str, bool] = {k: v["default"] for k, v in _FEATURE_REGISTRY.items()}
+
+
+def _is_feature_enabled(feature_id: str) -> bool:
+    """Check if a feature is enabled. Returns False for unknown features."""
+    return FEATURES.get(feature_id, False)
+
+
+def _load_features(state: dict) -> None:
+    """Populate FEATURES from persisted state, falling back to registry defaults."""
+    saved = state.get("features", {})
+    for fid, meta in _FEATURE_REGISTRY.items():
+        FEATURES[fid] = saved.get(fid, meta["default"])
+
+
+def _save_features(state: dict) -> dict:
+    """Write current FEATURES into state dict. Caller must call _save_user_state()."""
+    state["features"] = dict(FEATURES)
+    return state
+
+
+def _enabled_menu_keys() -> set[str]:
+    """Return set of menu keys whose feature is enabled."""
+    keys: set[str] = set()
+    for fid, meta in _FEATURE_REGISTRY.items():
+        if FEATURES.get(fid, False):
+            keys.update(meta.get("menu_keys", []))
+    return keys
+
 
 # ---------------------------------------------------------------------------
 # Mutable runtime globals (shared across modules)
@@ -439,9 +499,6 @@ _jql_cache: dict[str, tuple[float, list]] = {}
 # Animation toggle
 _ANIMATE = os.environ.get("CWHELPER_ANIMATE", "1") != "0"
 _VISUAL_MAPS = os.environ.get("CWHELPER_VISUAL_MAPS", "1") != "0"
-
-# Fleet (cwctl) toggle
-_FLEET_ENABLED = os.environ.get("CWHELPER_FLEET", "1") != "0"
 
 # AI toggle
 _AI_ENABLED = True

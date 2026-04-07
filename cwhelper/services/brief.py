@@ -308,9 +308,9 @@ def _print_brief(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 _DEMO_TICKETS_TEXT = """\
-DO-48823     | In Progress          | High     | Romeo Patino         | 10PQR847    | R04.U19       | 2026-03-09 | GPU node hard down — NVLink errors, node offline during active job
+DO-48823     | In Progress          | High     | Tech A               | 10PQR847    | R04.U19       | 2026-03-09 | GPU node hard down — NVLink errors, node offline during active job
 HO-23847     | Radar                | High     | Fleet Ops            | 10PQR847    | R04.U19       | 2026-03-09 | GPU node RMA — FD logs submitted, awaiting vendor RMA number
-DO-48991     | Verification         | Medium   | Romeo Patino         | 10NMK823    | R09.U14       | 2026-03-07 | Memory DIMM swap verification — customer SLA window active
+DO-48991     | Verification         | Medium   | Tech B               | 10NMK823    | R09.U14       | 2026-03-07 | Memory DIMM swap verification — customer SLA window active
 DO-49201     | Open                 | High     | Unassigned           | 10MRX994    | R12.U06       | 2026-03-08 | PSU replacement — parts received, needs scheduling
 DO-49102     | Open                 | Medium   | Unassigned           | 10NQT291    | R07.U22       | 2026-03-09 | IB link flap on QM9790 port 14 — 3 nodes impacted
 HO-23901     | In Progress          | High     | FRR Team             | 10NQT291    | R07.U22       | 2026-03-09 | IB QM9790 fabric investigation — R07 backbone link affected

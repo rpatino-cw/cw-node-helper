@@ -26,8 +26,6 @@ from cwhelper.services.session_log import _log_event, _print_session_log, _copy_
 from cwhelper.services.walkthrough import _walkthrough_mode
 from cwhelper.services.brief import run_shift_brief
 from cwhelper.services.learn import _run_learn_mode
-from cwhelper.clients.teleport import _tsh_cluster_status
-from cwhelper.clients.fleet import _cwctl_available
 from cwhelper.tui.rich_console import _rich_print_menu, console
 
 
@@ -149,19 +147,26 @@ def _interactive_menu():
     # Pre-warm user identity in background (for greeting + "my tickets")
     _executor.submit(_get_my_account_id, email, token)
 
-    # Load persistent state and resolve greeting
+    # Load persistent state, feature flags, and resolve greeting
     state = _load_user_state()
+    _cfg._load_features(state)
 
-    # Seed default bookmarks on first run (user can always remove them)
-    if not state.get("bookmarks"):
-        state["bookmarks"] = [
-            {"label": "All my tickets", "type": "queue",
-             "params": {"site": "", "project": "DO", "status_filter": "open", "mine_only": True}},
-            {"label": "Site Open queue", "type": "queue",
-             "params": {"site": os.environ.get("DEFAULT_SITE", ""), "project": "DO", "status_filter": "open"}},
-            {"label": "My Verification tickets", "type": "queue",
-             "params": {"site": "", "project": "DO", "status_filter": "verification", "mine_only": True}},
-        ]
+    # First-run welcome — detect fresh install (no user identity, no saved features)
+    if not state.get("user") and not state.get("features"):
+        _n_enabled = sum(1 for v in _cfg.FEATURES.values() if v)
+        _n_total = len(_cfg.FEATURES)
+        print(f"\n  {BOLD}{WHITE}Welcome to CW Node Helper!{RESET}\n")
+        print(f"  {DIM}You're all set — credentials verified.{RESET}")
+        print(f"  {DIM}Currently {GREEN}{_n_enabled}/{_n_total}{RESET}{DIM} features are enabled.{RESET}\n")
+        print(f"  Quick start:")
+        print(f"    {BOLD}1{RESET}  Look up a ticket     → type a ticket key like {CYAN}DO-12345{RESET}")
+        print(f"    {BOLD}s{RESET}  Open settings         → enable more features as you go")
+        print(f"    {BOLD}q{RESET}  Quit\n")
+        print(f"  {DIM}Enable features one at a time with:{RESET}")
+        print(f"    {BOLD}cwhelper config --enable queue{RESET}")
+        print(f"    {BOLD}cwhelper config --enable-all{RESET}\n")
+        # Persist features so this welcome only shows once
+        _cfg._save_features(state)
         _save_user_state(state)
 
     first_name = state.get("user", {}).get("first_name") or ""
@@ -191,37 +196,7 @@ def _interactive_menu():
     # Kick off first stale check immediately in background
     _stale_future = _executor.submit(_fetch_stale_issues)
 
-    # Kick off Teleport cluster status check in background
-    _cluster_future = _executor.submit(_tsh_cluster_status)
-    _cluster_online: str | None = None
-    _cluster_last_check: float = time.time()
-
-    # Kick off cwctl availability check in background
-    _cwctl_future = _executor.submit(_cwctl_available)
-    _cwctl_ready: bool | None = None
-
     while True:
-        # Collect completed cluster status (non-blocking)
-        if _cluster_future and _cluster_future.done():
-            try:
-                _cluster_online = _cluster_future.result()
-            except Exception:
-                _cluster_online = None
-            _cluster_future = None
-
-        # Collect cwctl availability (one-shot, no re-check)
-        if _cwctl_future and _cwctl_future.done():
-            try:
-                _cwctl_ready = _cwctl_future.result()
-            except Exception:
-                _cwctl_ready = False
-            _cwctl_future = None
-
-        # Re-check cluster status every 5 min
-        if _cluster_future is None and (time.time() - _cluster_last_check) > 300:
-            _cluster_future = _executor.submit(_tsh_cluster_status)
-            _cluster_last_check = time.time()
-
         # Collect completed stale check result (non-blocking)
         if _stale_future and _stale_future.done():
             try:
@@ -276,7 +251,7 @@ def _interactive_menu():
         opt4 = ("4", "Stop watching",  "watcher is running") if watcher_running \
                else ("4", "Watch queue", "grab tickets live")
 
-        options = [
+        _all_options = [
             ("1",  "Lookup",       "ticket key, service tag, or hostname"),
             ("2",  "Browse queue", "DO · HO · SDA"),
             ("3",  "My tickets",   ""),
@@ -292,6 +267,12 @@ def _interactive_menu():
             ("r",  "Rack report",  "tickets per rack"),
             ("L",  "Learn",        "code quiz game"),
         ]
+
+        # Filter to only enabled features (separators and settings always pass through)
+        _emk = _cfg._enabled_menu_keys()
+        options = [o for o in _all_options if not o[0].strip() or o[0] in _emk]
+        # Always show settings entry
+        options.append(("s",  "Settings",    "toggle features on/off"))
 
         bookmarks = state.get("bookmarks", [])
         bm_keys   = "abcde"
@@ -310,8 +291,6 @@ def _interactive_menu():
             ai_enabled=_AI_ENABLED,
             ai_available=ai_available,
             compact=_menu_compact,
-            cluster_status=_cluster_online,
-            cwctl_available=_cwctl_ready,
         )
 
         # --- Check for new tickets from background watcher ---
@@ -394,7 +373,7 @@ def _interactive_menu():
             _brief_pause(1)
             continue
         # --- AI chat (explicit) --------------------------------------------
-        if choice == "ai":
+        if choice == "ai" and _cfg._is_feature_enabled("ai_chat"):
             found_key = _ai_dispatch(email=email, token=token)
             if found_key and JIRA_KEY_PATTERN.match(found_key):
                 _act, state = _open_ticket(found_key, email, token, state)
@@ -412,7 +391,7 @@ def _interactive_menu():
             continue
 
         # --- Direct ticket key at main menu (e.g. DO-12345) --------------
-        if JIRA_KEY_PATTERN.match(choice.upper()):
+        if JIRA_KEY_PATTERN.match(choice.upper()) and _cfg._is_feature_enabled("ticket_lookup"):
             _act, state = _open_ticket(choice.upper(), email, token, state)
             if _act == "quit":
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
@@ -448,8 +427,14 @@ def _interactive_menu():
                     return
             continue
 
+        # --- s: Settings — feature toggle page --------------------------------
+        if choice == "s":
+            from cwhelper.tui.settings import _settings_page
+            state = _settings_page(state)
+            continue
+
         # --- 1: Smart lookup — ticket key OR service tag / hostname ----------
-        if choice == "1":
+        if choice == "1" and _cfg._is_feature_enabled("ticket_lookup"):
             recent_tickets = list(state.get("recent_tickets", []))
             recent_nodes   = list(state.get("recent_nodes", []))
             _fetched_issues: list = []
@@ -620,7 +605,7 @@ def _interactive_menu():
                     return
 
         # --- 2: Browse queue (DO, HO, or SDA) --------------------------------
-        elif choice == "2":
+        elif choice == "2" and _cfg._is_feature_enabled("queue"):
             print(f"\n  {DIM}Project:{RESET}")
             print(f"    {BOLD}1{RESET} DO  — Data Operations {DIM}(hands-on: reseat, swap, cable){RESET}")
             print(f"    {BOLD}2{RESET} HO  — Hardware Operations {DIM}(RMA lifecycle, vendor, parts){RESET}")
@@ -646,7 +631,7 @@ def _interactive_menu():
                 return
 
         # --- 3: My tickets — with stale sub-filter when stale tickets exist ---
-        elif choice == "3":
+        elif choice == "3" and _cfg._is_feature_enabled("my_tickets"):
             if _stale_count > 0:
                 plural = "s" if _stale_count != 1 else ""
                 print(f"\n  {DIM}My tickets:{RESET}")
@@ -672,7 +657,7 @@ def _interactive_menu():
                 return
 
         # --- 4: Watch queue (toggle background watcher) --------------------
-        elif choice == "4":
+        elif choice == "4" and _cfg._is_feature_enabled("watcher"):
             if _is_watcher_running():
                 _stop_background_watcher()
                 print(f"\n  {DIM}Watcher stopped.{RESET}")
@@ -723,7 +708,7 @@ def _interactive_menu():
                 _brief_pause()
 
         # --- 5: Rack map -------------------------------------------------------
-        elif choice == "5":
+        elif choice == "5" and _cfg._is_feature_enabled("rack_map"):
             recent_racks = list(state.get("recent_racks", []))
 
             # Backfill from user's queue if fewer than 5
@@ -800,11 +785,11 @@ def _interactive_menu():
                 print(f"  {DIM}Could not parse rack location. Expected format: US-SITE01.DH1.R64.RU34{RESET}")
 
         # --- 6: Bookmark manager ----------------------------------------------
-        elif choice == "6":
+        elif choice == "6" and _cfg._is_feature_enabled("bookmarks"):
             state = _manage_bookmarks(state, email, token)
 
         # --- b: Shift brief — AI priority summary from live queue ------------
-        elif choice == "b":
+        elif choice == "b" and _cfg._is_feature_enabled("shift_brief"):
             _site = state.get("site_filter", os.environ.get("DEFAULT_SITE", ""))
             run_shift_brief(email, token, site=_site)
             try:
@@ -813,7 +798,7 @@ def _interactive_menu():
                 pass
 
         # --- p: Bulk start — put all my open DO tickets In Progress -----------
-        elif choice == "p":
+        elif choice == "p" and _cfg._is_feature_enabled("bulk_start"):
             print(f"\n  {DIM}Finding your open DO tickets...{RESET}", end="", flush=True)
             try:
                 _pr = _jira_post("/rest/api/3/search/jql", email, token, body={
@@ -875,7 +860,7 @@ def _interactive_menu():
             _brief_pause(1.5)
 
         # --- P: Bulk start awaiting (unassigned) → clipboard -------------------
-        elif _raw_choice == "P":
+        elif _raw_choice == "P" and _cfg._is_feature_enabled("bulk_start"):
             _pa_site = state.get("site_filter", os.environ.get("DEFAULT_SITE", ""))
             _pa_site_jql = f' AND cf[10194] = "{_pa_site}"' if _pa_site else ""
             print(f"\n  {DIM}Finding unassigned awaiting DO tickets{' at ' + _pa_site if _pa_site else ''}...{RESET}", end="", flush=True)
@@ -957,11 +942,11 @@ def _interactive_menu():
             _brief_pause(1.5)
 
         # --- L: Learn mode (code quiz game) ------------------------------------
-        elif _raw_choice == "L":
+        elif _raw_choice == "L" and _cfg._is_feature_enabled("learn"):
             _run_learn_mode()
 
         # --- l: Activity — session log or Jira changelog ----------------------
-        elif choice == "l":
+        elif choice == "l" and _cfg._is_feature_enabled("activity"):
             print(f"\n  {DIM}Activity:{RESET}")
             print(f"    {BOLD}1{RESET} Session log     {DIM}today's actions{RESET}")
             print(f"    {BOLD}2{RESET} Jira activity   {DIM}changelog{RESET}")
@@ -1002,7 +987,7 @@ def _interactive_menu():
                 _clear_screen()
 
         # --- r: Rack report (tickets per rack breakdown) ----------------------
-        elif choice == "r":
+        elif choice == "r" and _cfg._is_feature_enabled("rack_report"):
             filters = _ask_queue_filters()
             if filters:
                 from cwhelper.services.rack_report import _run_rack_report
@@ -1017,7 +1002,7 @@ def _interactive_menu():
                 _clear_screen()
 
         # --- w: Walkthrough mode (rack-by-rack DH walk with annotations) ------
-        elif choice == "w":
+        elif choice == "w" and _cfg._is_feature_enabled("walkthrough"):
             state = _walkthrough_mode(state, email, token)
 
         elif choice == "??":
@@ -1032,7 +1017,7 @@ def _interactive_menu():
 
         else:
             # AI default-on: route unrecognized input to AI chat
-            if _AI_ENABLED and ai_available and len(choice) > 1:
+            if _AI_ENABLED and ai_available and _cfg._is_feature_enabled("ai_chat") and len(choice) > 1:
                 found_key = _ai_dispatch(email=email, token=token, initial_msg=choice)
                 if found_key and JIRA_KEY_PATTERN.match(found_key):
                     _act, state = _open_ticket(found_key, email, token, state)

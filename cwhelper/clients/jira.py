@@ -21,11 +21,14 @@ def _get_env_or_exit(var_name: str) -> str:
     """Return the value of an env var, or exit with a helpful message."""
     value = os.environ.get(var_name, "").strip()
     if not value:
-        print(
-            f"Error: environment variable {var_name} is not set.\n"
-            f"Export it first:\n"
-            f"  export {var_name}='your-value-here'"
-        )
+        print(f"\n  \033[33mMissing: {var_name}\033[0m\n")
+        print(f"  To get started, copy the example config and fill in your credentials:")
+        print(f"    cp .env.example .env")
+        print(f"    # Edit .env with your Jira email + API token\n")
+        print(f"  Or export directly:")
+        print(f"    export {var_name}='your-value-here'\n")
+        print(f"  Need a Jira API token?")
+        print(f"    https://id.atlassian.com/manage-profile/security/api-tokens\n")
         sys.exit(1)
     return value
 

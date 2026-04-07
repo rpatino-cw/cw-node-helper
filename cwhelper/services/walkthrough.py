@@ -89,7 +89,7 @@ _ATLASSIAN_BROWSE_PREFIX = f"{JIRA_BASE_URL}/browse/"
 
 
 def _normalize_ticket_key(val: str) -> str:
-    """Strip Atlassian browse URL to just the ticket key. 'https://...browse/HO-74412' → 'HO-74412'."""
+    """Strip Atlassian browse URL to just the ticket key. 'https://...browse/HO-12345' → 'HO-12345'."""
     if not val:
         return val
     val = val.strip()

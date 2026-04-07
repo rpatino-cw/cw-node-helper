@@ -11,7 +11,7 @@ from cwhelper import config as _cfg
 from cwhelper.config import *  # noqa: F401,F403
 __all__ = ['main', '_print_cli_help', '_cli_queue', '_cli_history', '_cli_watch', '_cli_weekend_assign', '_cli_verify', '_cli_ibtrace', '_cli_lookup']
 from cwhelper.clients.jira import _get_credentials, _jira_health_check
-from cwhelper.state import _load_user_state
+from cwhelper.state import _load_user_state, _save_user_state
 from cwhelper.services.context import _build_context, _format_age, get_node_context
 from cwhelper.services.search import _search_queue
 from cwhelper.services.queue import _run_queue_interactive, _run_queue_json, _run_history_interactive, _run_history_json
@@ -32,14 +32,29 @@ def _preflight_check():
     except SystemExit:
         return  # credentials missing — _get_credentials already printed the error
     if not _jira_health_check(email, token):
-        print(f"\n  \033[33m⚠  Cannot reach Jira (coreweave.atlassian.net)\033[0m")
-        print(f"     Check VPN/Teleport connection and retry.")
+        jira_host = os.environ.get("JIRA_BASE_URL", "your Jira instance")
+        print(f"\n  \033[33m⚠  Cannot reach Jira ({jira_host})\033[0m")
+        print(f"     Check your network connection and retry.")
         print(f"     Starting in offline mode — some features will fail.\n")
+
+
+def _require_feature(feature_id: str) -> bool:
+    """Check feature flag; print message and return False if disabled."""
+    if not _cfg._is_feature_enabled(feature_id):
+        label = _cfg._FEATURE_REGISTRY.get(feature_id, {}).get("label", feature_id)
+        print(f"\n  {YELLOW}Feature disabled:{RESET} {label}")
+        print(f"  Run {BOLD}cwhelper config{RESET} to enable it.\n")
+        return False
+    return True
 
 
 def main():
     """Dispatch: no args = interactive menu, with args = one-shot mode."""
     raw_args = sys.argv[1:]
+
+    # Load persisted feature flags before any dispatch
+    _state = _load_user_state()
+    _cfg._load_features(_state)
 
     # No arguments at all → launch interactive menu
     if not raw_args:
@@ -52,72 +67,108 @@ def main():
         _print_cli_help()
         return
 
+    # "setup" subcommand — interactive credential wizard
+    if raw_args[0] == "setup":
+        _cli_setup()
+        return
+
+    # "config" subcommand — feature toggle management
+    if raw_args[0] == "config":
+        _cli_config(raw_args[1:])
+        return
+
     # "queue" subcommand (one-shot, scriptable)
     if raw_args[0] == "queue":
+        if not _require_feature("queue"):
+            return
         _cli_queue(raw_args[1:])
         return
 
     # "history" subcommand
     if raw_args[0] == "history":
+        if not _require_feature("node_history"):
+            return
         _cli_history(raw_args[1:])
         return
 
     # "watch" subcommand
     if raw_args[0] == "watch":
+        if not _require_feature("watcher"):
+            return
         _cli_watch(raw_args[1:])
         return
 
     # "weekend-assign" subcommand
     if raw_args[0] == "weekend-assign":
+        if not _require_feature("weekend_assign"):
+            return
         _cli_weekend_assign(raw_args[1:])
         return
 
     # "brief" subcommand — AI shift priority summary
     if raw_args[0] == "brief":
+        if not _require_feature("shift_brief"):
+            return
         _cli_brief(raw_args[1:])
         return
 
     # "verify" subcommand — DCT self-service verification
     if raw_args[0] == "verify":
+        if not _require_feature("verify"):
+            return
         _cli_verify(raw_args[1:])
         return
 
     # "rack-report" subcommand — tickets grouped by rack
     if raw_args[0] == "rack-report":
+        if not _require_feature("rack_report"):
+            return
         _cli_rack_report(raw_args[1:])
         return
 
     # "learn" subcommand — code quiz game
     if raw_args[0] == "learn":
+        if not _require_feature("learn"):
+            return
         _run_learn_mode()
         return
 
     # "ibtrace" subcommand — IB connection trace/lookup
     if raw_args[0] == "ibtrace":
+        if not _require_feature("ibtrace"):
+            return
         _cli_ibtrace(raw_args[1:])
         return
 
-    # Anything else → one-shot lookup
+    # Anything else → one-shot lookup (ticket key, service tag, hostname)
+    if not _require_feature("ticket_lookup"):
+        return
     _cli_lookup(raw_args)
 
 
 def _print_cli_help():
     """Print help text for CLI one-shot mode."""
     print(f"""
-  DCT Node Helper  v{APP_VERSION}
+  CW Node Helper  v{APP_VERSION}
+
+  GETTING STARTED
+    cwhelper setup                              # first-time credential wizard
+    cwhelper config --enable-all                # enable all features
+    cwhelper                                    # launch interactive menu
 
   USAGE
-    python3 get_node_context.py                           # interactive menu
-    python3 get_node_context.py <identifier> [options]    # one-shot lookup
-    python3 get_node_context.py queue --site <SITE>       # one-shot queue
-    python3 get_node_context.py brief [--site <SITE>]     # AI shift brief
-    python3 get_node_context.py history <identifier>      # node ticket history
-    python3 get_node_context.py watch --site <SITE>       # live queue watcher
-    python3 get_node_context.py weekend-assign --site <SITE> --group <GROUP>
-    python3 get_node_context.py learn                            # code quiz game
-    cwhelper rack-report --site <SITE>                   # tickets per rack
-    python3 get_node_context.py verify <identifier> [--type TYPE]
-    cwhelper ibtrace <switch> [port]                   # IB connection trace
+    cwhelper                                    # interactive menu
+    cwhelper <identifier> [options]             # one-shot lookup
+    cwhelper queue --site <SITE>                # one-shot queue
+    cwhelper brief [--site <SITE>]              # AI shift brief
+    cwhelper history <identifier>               # node ticket history
+    cwhelper watch --site <SITE>                # live queue watcher
+    cwhelper weekend-assign --site <SITE> --group <GROUP>
+    cwhelper learn                              # code quiz game
+    cwhelper rack-report --site <SITE>          # tickets per rack
+    cwhelper verify <identifier> [--type TYPE]  # verification flows
+    cwhelper ibtrace <switch> [port]            # IB connection trace
+    cwhelper config                             # feature toggle management
 
   IDENTIFIER (pick one)
     DO-12345        Jira ticket key (DO or HO)
@@ -174,35 +225,214 @@ def _print_cli_help():
     --dh            Filter by data hall (DH1, DH2)
     --json          Output as JSON
 
-  EXAMPLES
-    python3 get_node_context.py                                          # interactive
-    python3 get_node_context.py DO-12345                                 # lookup
-    python3 get_node_context.py 10NQ724                                  # search
-    python3 get_node_context.py DO-12345 --json                          # JSON output
-    python3 get_node_context.py queue --site US-EAST-03                  # open DO
-    python3 get_node_context.py queue --site US-EAST-03 --status closed   # closed DO
-    python3 get_node_context.py queue --site US-EAST-03 --project HO     # HO queue
-    python3 get_node_context.py queue --status verification --mine       # my verification
-    python3 get_node_context.py history 10NQ724                          # node history
-    python3 get_node_context.py history d0001142 --json                  # history as JSON
-    python3 get_node_context.py watch --site US-EAST-03                  # watch queue
-    python3 get_node_context.py watch --site US-EAST-03 -i 180          # every 3 min
-    python3 get_node_context.py weekend-assign -s US-EAST-03 -g dct-ops              # auto-assign
-    python3 get_node_context.py weekend-assign -s US-EAST-03 -g dct-ops --dry-run --force
-    cwhelper rack-report --site US-EAST-03                               # which racks have most tickets
-    cwhelper rack-report --site US-EAST-03 --status all --json           # full JSON breakdown
-    python3 get_node_context.py verify DO-96947                          # auto-detect flow
-    python3 get_node_context.py verify DO-96947 --type power             # force power flow
-    python3 get_node_context.py verify ss943425x5109244 --type bmc       # by serial
+  FEATURE CONFIG
+    cwhelper config                             # show all features + status
+    cwhelper config --enable queue              # enable a feature
+    cwhelper config --disable queue             # disable a feature
+    cwhelper config --enable-all                # enable everything
+    cwhelper config --disable-all               # disable everything
 
-  SETUP (first time only)
-    1. Generate a Jira API token:
-       https://id.atlassian.com/manage-profile/security/api-tokens
-    2. Set env vars (add to ~/.zshrc to keep them):
-       export JIRA_EMAIL="you@example.com"
-       export JIRA_API_TOKEN="your-token"
-    3. pip3 install requests
+  EXAMPLES
+    cwhelper setup                              # first-time setup
+    cwhelper DO-12345                           # lookup a ticket
+    cwhelper 10NQ724                            # search by service tag
+    cwhelper DO-12345 --json                    # JSON output
+    cwhelper queue --site US-EAST-03            # open DO queue
+    cwhelper queue --status verification --mine # my verification tickets
+    cwhelper history 10NQ724                    # node ticket history
+    cwhelper watch --site US-EAST-03            # watch queue for new tickets
+    cwhelper rack-report --site US-EAST-03      # tickets per rack
+    cwhelper verify DO-96947                    # auto-detect verification flow
+    cwhelper ibtrace S8.3.2 22/1               # trace IB connection
 """)
+
+
+def _cli_config(args_list: list):
+    """Handle: cwhelper config [--enable X] [--disable X] [--enable-all] [--disable-all]"""
+    state = _load_user_state()
+    _cfg._load_features(state)
+
+    parser = argparse.ArgumentParser(prog="cwhelper config", add_help=False)
+    parser.add_argument("--enable", default=None, help="enable a feature by ID")
+    parser.add_argument("--disable", default=None, help="disable a feature by ID")
+    parser.add_argument("--enable-all", action="store_true", dest="enable_all")
+    parser.add_argument("--disable-all", action="store_true", dest="disable_all")
+    parser.add_argument("--json", action="store_true", dest="json_mode")
+    args = parser.parse_args(args_list)
+
+    changed = False
+
+    if args.enable_all:
+        for fid in _cfg.FEATURES:
+            _cfg.FEATURES[fid] = True
+        changed = True
+    elif args.disable_all:
+        for fid in _cfg.FEATURES:
+            _cfg.FEATURES[fid] = False
+        changed = True
+    elif args.enable:
+        fid = args.enable
+        if fid not in _cfg._FEATURE_REGISTRY:
+            print(f"\n  {RED}Unknown feature:{RESET} {fid}")
+            print(f"  Valid features: {', '.join(sorted(_cfg._FEATURE_REGISTRY))}\n")
+            return
+        _cfg.FEATURES[fid] = True
+        changed = True
+    elif args.disable:
+        fid = args.disable
+        if fid not in _cfg._FEATURE_REGISTRY:
+            print(f"\n  {RED}Unknown feature:{RESET} {fid}")
+            print(f"  Valid features: {', '.join(sorted(_cfg._FEATURE_REGISTRY))}\n")
+            return
+        _cfg.FEATURES[fid] = False
+        changed = True
+
+    if changed:
+        _cfg._save_features(state)
+        _save_user_state(state)
+
+    # Display current state
+    if args.json_mode:
+        print(json.dumps({fid: _cfg.FEATURES[fid] for fid in sorted(_cfg.FEATURES)}, indent=2))
+        return
+
+    print(f"\n  {BOLD}Feature Configuration{RESET}\n")
+    for fid in sorted(_cfg._FEATURE_REGISTRY):
+        meta = _cfg._FEATURE_REGISTRY[fid]
+        enabled = _cfg.FEATURES.get(fid, False)
+        status = f"{GREEN}{BOLD} ON{RESET}" if enabled else f"{RED}{BOLD}OFF{RESET}"
+        deps = ", ".join(meta.get("deps", [])) or "none"
+        cmd = meta.get("cli_cmd") or ""
+        menu = ",".join(meta.get("menu_keys", [])) or ""
+        hint_parts = []
+        if cmd:
+            hint_parts.append(f"cli:{cmd}")
+        if menu:
+            hint_parts.append(f"menu:{menu}")
+        hint = f"  {DIM}({', '.join(hint_parts)}){RESET}" if hint_parts else ""
+        print(f"    [{status}]  {fid:<20} {meta['label']}{hint}")
+    print(f"\n  {DIM}Toggle: cwhelper config --enable <feature> / --disable <feature>{RESET}")
+    print(f"  {DIM}        cwhelper config --enable-all / --disable-all{RESET}\n")
+
+
+def _cli_setup():
+    """Interactive setup wizard — creates .env with credentials and tests connectivity."""
+    import getpass
+
+    env_path = os.path.join(_cfg._PROJECT_ROOT, ".env")
+    existing = {}
+
+    # Read existing .env if present
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip().strip('"').strip("'")
+
+    print(f"\n  {BOLD}CW Node Helper — Setup{RESET}\n")
+    print(f"  {DIM}This will create a .env file with your credentials.{RESET}")
+    print(f"  {DIM}Press ENTER to keep the current value (shown in brackets).{RESET}\n")
+
+    fields = [
+        ("JIRA_BASE_URL",    "Jira URL",        "https://your-org.atlassian.net",
+         "Your Jira Cloud instance URL"),
+        ("JIRA_EMAIL",       "Jira email",       "",
+         "The email you log into Jira with"),
+        ("JIRA_API_TOKEN",   "Jira API token",   "",
+         "Generate at: https://id.atlassian.com/manage-profile/security/api-tokens"),
+        ("NETBOX_API_URL",   "NetBox URL",        "",
+         "Your NetBox instance URL (optional — skip if you don't use NetBox)"),
+        ("NETBOX_API_TOKEN", "NetBox API token",  "",
+         "NetBox API token (optional)"),
+        ("KNOWN_SITES",      "Known sites",       "",
+         "Comma-separated site codes, e.g. US-EAST-03,US-WEST-01 (optional)"),
+    ]
+
+    values = {}
+    try:
+        for key, label, default, hint in fields:
+            current = existing.get(key) or os.environ.get(key, "") or default
+            display = current if key != "JIRA_API_TOKEN" else ("***" + current[-4:] if len(current) > 4 else current)
+
+            print(f"  {DIM}{hint}{RESET}")
+            if key == "JIRA_API_TOKEN" and current:
+                raw = getpass.getpass(f"  {BOLD}{label}{RESET} [{display}]: ")
+            else:
+                raw = input(f"  {BOLD}{label}{RESET} [{display}]: ").strip()
+
+            values[key] = raw if raw else current
+            print()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n\n  {DIM}Setup cancelled.{RESET}\n")
+        return
+
+    # Write .env
+    lines = [
+        "# CW Node Helper credentials",
+        "# Generated by: cwhelper setup",
+        "#",
+    ]
+    for key, _, _, _ in fields:
+        val = values.get(key, "")
+        if val:
+            lines.append(f'{key}="{val}"')
+    lines.append("")
+
+    with open(env_path, "w") as f:
+        f.write("\n".join(lines))
+    try:
+        os.chmod(env_path, 0o600)
+    except OSError:
+        pass
+
+    print(f"  {GREEN}{BOLD}Saved{RESET} → .env")
+    print(f"  {DIM}Permissions set to 600 (owner-only read/write){RESET}\n")
+
+    # Test Jira connectivity
+    jira_url = values.get("JIRA_BASE_URL", "")
+    jira_email = values.get("JIRA_EMAIL", "")
+    jira_token = values.get("JIRA_API_TOKEN", "")
+
+    if jira_email and jira_token and jira_url:
+        print(f"  {DIM}Testing Jira connection...{RESET}", end="", flush=True)
+        os.environ["JIRA_BASE_URL"] = jira_url
+        os.environ["JIRA_EMAIL"] = jira_email
+        os.environ["JIRA_API_TOKEN"] = jira_token
+        _cfg.JIRA_BASE_URL = jira_url
+        if _jira_health_check(jira_email, jira_token):
+            print(f"\r  {GREEN}{BOLD}Jira OK{RESET}                         ")
+        else:
+            print(f"\r  {YELLOW}Jira unreachable{RESET} — check URL/token/network")
+    else:
+        print(f"  {DIM}Skipping Jira test — credentials incomplete{RESET}")
+
+    # Test NetBox connectivity
+    nb_url = values.get("NETBOX_API_URL", "")
+    nb_token = values.get("NETBOX_API_TOKEN", "")
+    if nb_url and nb_token:
+        print(f"  {DIM}Testing NetBox connection...{RESET}", end="", flush=True)
+        os.environ["NETBOX_API_URL"] = nb_url
+        os.environ["NETBOX_API_TOKEN"] = nb_token
+        try:
+            resp = _cfg._session.get(
+                f"{nb_url.rstrip('/')}/api/status/",
+                headers={"Authorization": f"Token {nb_token}", "Accept": "application/json"},
+                timeout=(3, 5),
+            )
+            if resp.status_code < 400:
+                print(f"\r  {GREEN}{BOLD}NetBox OK{RESET}                       ")
+            else:
+                print(f"\r  {YELLOW}NetBox returned {resp.status_code}{RESET} — check URL/token")
+        except Exception:
+            print(f"\r  {YELLOW}NetBox unreachable{RESET} — check URL/network")
+
+    print(f"\n  {DIM}Next steps:{RESET}")
+    print(f"    {BOLD}cwhelper{RESET}                        Launch interactive menu")
+    print(f"    {BOLD}cwhelper DO-12345{RESET}               Look up a ticket")
+    print(f"    {BOLD}cwhelper config --enable-all{RESET}    Enable all features\n")
 
 
 def _cli_queue(args_list: list):

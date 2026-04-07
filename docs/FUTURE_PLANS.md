@@ -475,7 +475,7 @@ kv.add_column("Key", style="bold", no_wrap=True)
 kv.add_column("Value", overflow="fold")
 kv.add_row("Site", "US-SITE-01A")
 kv.add_row("Service Tag", "S948338X5A04781")
-console.print(Panel(kv, title="DO-88653 - On Hold", subtitle="Assignee: Romeo Patino"))
+console.print(Panel(kv, title="DO-12345 - On Hold", subtitle="Assignee: Tech A"))
 ```
 
 **Prerequisite:** Do the modular refactor first (Phase 2.2) so all display logic lives in `display.py`. Then swapping in Rich touches one file instead of hunting through 1800 lines.

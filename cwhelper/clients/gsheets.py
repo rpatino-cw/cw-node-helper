@@ -23,7 +23,7 @@ _COL = {
     "issue":          3,  # Uncabled for RMA.
     "date_reported":  4,  # datetime
     "days_pending":   5,  # formula or number
-    "rma_ticket":     6,  # HO-89952
+    "rma_ticket":     6,  # HO-XXXXX
     "status":         7,  # RMA Engaged
     "last_noted":     8,  # datetime
     "assigned_to":    9,

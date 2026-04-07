@@ -144,7 +144,7 @@ def _request_with_retry(method, *args, retries: int = 2, **kwargs):
                 host = url.split("/")[2] if isinstance(url, str) and "/" in url else str(url)
                 print(f"\n  \033[33m⚠  Network error reaching {host}\033[0m")
                 print(f"     {type(exc).__name__}: {_short_exc(exc)}")
-                print(f"     Check VPN/Teleport and retry.\n")
+                print(f"     Check your network connection and retry.\n")
                 raise SystemExit(1)
         except requests.RequestException as exc:
             last_exc = exc

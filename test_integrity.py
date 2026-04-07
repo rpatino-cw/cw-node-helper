@@ -1547,6 +1547,113 @@ class TestNetboxSiteMismatchFallback(unittest.TestCase):
 
 
 # ===========================================================================
+# Feature flag system
+# ===========================================================================
+
+class TestFeatureFlags(unittest.TestCase):
+    """Verify the feature flag registry, loading, saving, and gating."""
+
+    def setUp(self):
+        # Reset features to defaults before each test
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            _cfg.FEATURES[fid] = meta["default"]
+
+    def test_registry_has_all_features(self):
+        expected = {
+            "ticket_lookup", "queue", "my_tickets", "node_history",
+            "shift_brief", "verify", "watcher", "rack_report",
+            "ibtrace", "learn", "rack_map", "bookmarks",
+            "bulk_start", "activity", "walkthrough", "weekend_assign",
+            "ai_chat",
+        }
+        self.assertEqual(set(_cfg._FEATURE_REGISTRY.keys()), expected)
+
+    def test_registry_entries_have_required_keys(self):
+        required = {"label", "cli_cmd", "menu_keys", "deps", "default"}
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            self.assertTrue(required.issubset(meta.keys()),
+                            f"{fid} missing keys: {required - meta.keys()}")
+
+    def test_only_ticket_lookup_enabled_by_default(self):
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            if fid == "ticket_lookup":
+                self.assertTrue(meta["default"], f"{fid} should default to True")
+            else:
+                self.assertFalse(meta["default"], f"{fid} should default to False")
+
+    def test_load_features_from_state(self):
+        state = {"features": {"queue": True, "learn": True}}
+        _cfg._load_features(state)
+        self.assertTrue(_cfg.FEATURES["queue"])
+        self.assertTrue(_cfg.FEATURES["learn"])
+        self.assertTrue(_cfg.FEATURES["ticket_lookup"])  # default
+        self.assertFalse(_cfg.FEATURES["watcher"])       # default
+
+    def test_load_features_empty_state(self):
+        _cfg._load_features({})
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            self.assertEqual(_cfg.FEATURES[fid], meta["default"])
+
+    def test_save_features_roundtrip(self):
+        _cfg.FEATURES["queue"] = True
+        _cfg.FEATURES["learn"] = True
+        state = {}
+        _cfg._save_features(state)
+        self.assertTrue(state["features"]["queue"])
+        self.assertTrue(state["features"]["learn"])
+        # Reset and reload
+        _cfg.FEATURES["queue"] = False
+        _cfg.FEATURES["learn"] = False
+        _cfg._load_features(state)
+        self.assertTrue(_cfg.FEATURES["queue"])
+        self.assertTrue(_cfg.FEATURES["learn"])
+
+    def test_is_feature_enabled(self):
+        _cfg.FEATURES["learn"] = True
+        self.assertTrue(_cfg._is_feature_enabled("learn"))
+        _cfg.FEATURES["learn"] = False
+        self.assertFalse(_cfg._is_feature_enabled("learn"))
+
+    def test_is_feature_enabled_unknown(self):
+        self.assertFalse(_cfg._is_feature_enabled("nonexistent_feature"))
+
+    def test_enabled_menu_keys(self):
+        # Only ticket_lookup is on by default
+        keys = _cfg._enabled_menu_keys()
+        self.assertIn("1", keys)       # ticket_lookup menu key
+        self.assertNotIn("2", keys)    # queue disabled
+        self.assertNotIn("L", keys)    # learn disabled
+
+    def test_enabled_menu_keys_after_enabling(self):
+        _cfg.FEATURES["queue"] = True
+        _cfg.FEATURES["learn"] = True
+        keys = _cfg._enabled_menu_keys()
+        self.assertIn("1", keys)
+        self.assertIn("2", keys)
+        self.assertIn("L", keys)
+
+    def test_menu_options_filtered(self):
+        """Disabled features are excluded from menu options list."""
+        options = [
+            ("1",  "Lookup",       "hint"),
+            ("2",  "Browse queue", "hint"),
+            ("",   "",             ""),
+            ("L",  "Learn",        "hint"),
+        ]
+        # Only ticket_lookup enabled
+        _cfg.FEATURES["queue"] = False
+        _cfg.FEATURES["learn"] = False
+        emk = _cfg._enabled_menu_keys()
+        filtered = [o for o in options if not o[0].strip() or o[0] in emk]
+        keys = [o[0] for o in filtered if o[0].strip()]
+        self.assertIn("1", keys)
+        self.assertNotIn("2", keys)
+        self.assertNotIn("L", keys)
+        # Separator preserved
+        self.assertIn(("", "", ""), filtered)
+
+
+# ===========================================================================
 
 if __name__ == "__main__":
     unittest.main()
