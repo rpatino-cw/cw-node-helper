@@ -533,10 +533,7 @@ def _rich_print_menu(
     _n_total = len(_FEATURES)
     if _n_on < _n_total:
         feat = Text(INDENT)
-        feat.append(f"{_n_on}/{_n_total} features enabled", style="dim")
-        feat.append("  →  ", style="dim")
-        feat.append("s", style="bold")
-        feat.append("  settings", style="dim")
+        feat.append(f"{_n_on}/{_n_total} features enabled", style="dim italic")
         console.print(feat)
 
     # Bookmarks
