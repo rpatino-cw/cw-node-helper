@@ -13,6 +13,7 @@ license = {text = "MIT"}
 [project.optional-dependencies]
 ai = ["openai>=1.0.0"]
 visual = ["Pillow>=9.0.0"]
+tui = ["textual>=0.50.0"]
 
 [project.scripts]
 cwhelper = "cwhelper.cli:main"
