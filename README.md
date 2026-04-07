@@ -1,61 +1,98 @@
-# cwhelper
+<p align="center">
+  <img src="assets/banner.svg" alt="cwhelper banner" width="800">
+</p>
 
-DCT terminal companion -- Jira + NetBox + Grafana queue browser for data center operations.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/version-6.5.0-58a6ff?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/features-17_toggleable-d29922?style=flat-square" alt="Features">
+  <img src="https://img.shields.io/badge/tests-176_passing-3fb950?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="License">
+</p>
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![Version](https://img.shields.io/badge/version-6.5.0-orange)
-![License](https://img.shields.io/badge/license-MIT-green)
+<p align="center">
+  <b>DCT terminal companion</b> — look up tickets, browse queues, trace cables, and manage your shift from one CLI.
+</p>
 
 ---
 
-## Quick Start
+<!-- TODO: record with `vhs assets/tapes/hero.tape` -->
+<!-- ![cwhelper demo](assets/hero.gif) -->
 
-### One-liner install
+## Install
+
+> **One command. Zero config files to edit manually.**
 
 ```bash
-curl -sL https://raw.githubusercontent.com/rpatino-cw/cw-node-helper/main/install.sh | bash
+curl -sL https://raw.githubusercontent.com/rpatino-cw/cw-node-helper/rpatino/cw-node-helper/install.sh | bash
 ```
 
-This clones the repo, installs the package, and runs the setup wizard.
+This clones the repo, installs dependencies, runs the setup wizard, discovers your sites from Jira, and enables all features. You'll be looking up tickets in under 60 seconds.
 
-### Manual install
+<details>
+<summary><b>Manual install</b></summary>
 
 ```bash
-git clone https://github.com/rpatino-cw/cw-node-helper.git
+git clone -b rpatino/cw-node-helper https://github.com/rpatino-cw/cw-node-helper.git
 cd cw-node-helper
 pip install -e .
-cwhelper setup    # interactive credential wizard
-cwhelper          # launch
+cwhelper setup
+cwhelper
 ```
 
-### What you'll need
+</details>
+
+<details>
+<summary><b>What you'll need</b></summary>
 
 - Python 3.10+
-- A Jira API token ([generate one here](https://id.atlassian.com/manage-profile/security/api-tokens))
+- A Jira API token — [generate one here](https://id.atlassian.com/manage-profile/security/api-tokens)
 - Your Jira email address
 - (Optional) NetBox API URL and token
+
+</details>
+
+---
+
+## How It Works
+
+```
+                    cwhelper
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+       Ticket       Queue       Doctor
+      Lookup       Browser      Check
+          │            │            │
+     ┌────┴────┐   ┌───┴───┐   ┌───┴───┐
+     │  Jira   │   │ Jira  │   │ .env  │
+     │ NetBox  │   │ Site  │   │ APIs  │
+     │Grafana  │   │Filter │   │ Auth  │
+     └─────────┘   └───────┘   └───────┘
+```
+
+Type a ticket key, service tag, or hostname at the prompt. cwhelper pulls context from Jira, enriches it with NetBox device data, and gives you everything you need on one screen: **where** the device is, **what** to do, and **which** device to touch.
 
 ---
 
 ## Usage
 
-```
+```bash
 cwhelper                          # interactive menu
 cwhelper DO-12345                 # look up a ticket
 cwhelper 10NQ724                  # search by service tag
-cwhelper queue --site US-EAST-03  # browse queue
-cwhelper setup                    # credential wizard
-cwhelper config                   # view/toggle features
+cwhelper queue --site US-EAST-03  # browse open tickets
+cwhelper doctor                   # health check
+cwhelper config                   # toggle features
+cwhelper update                   # pull latest version
 cwhelper -h                       # full help
 ```
-
-At the interactive menu, type any ticket key, service tag, or hostname directly -- no submenu needed.
 
 ---
 
 ## Features
 
-All features can be toggled on/off individually:
+Every feature can be toggled on/off. Only what you need, nothing you don't.
 
 ```bash
 cwhelper config                   # see what's enabled
@@ -63,19 +100,122 @@ cwhelper config --enable queue    # enable one feature
 cwhelper config --enable-all      # enable everything
 ```
 
-| Feature | Command | What it does |
-|---------|---------|-------------|
-| Ticket lookup | `DO-12345` | Full ticket context: Jira + NetBox + Grafana links |
-| Queue browser | `queue` | Filter by site, status, project (DO/HO/SDA) |
-| Node history | `history` | All tickets for a device by service tag or hostname |
-| Shift brief | `brief` | AI-generated priority summary for your shift |
-| Verification | `verify` | Guided verification flows (IB, BMC, power, etc.) |
-| Queue watcher | `watch` | Background poller with alerts for new tickets |
-| Rack report | `rack-report` | Tickets grouped by rack location |
-| IB trace | `ibtrace` | InfiniBand connection tracing from topology data |
-| Code quiz | `learn` | Study mode for DCT procedures |
+<table>
+<tr>
+<td width="50%" valign="top">
 
-Interactive-only features: rack map, bookmarks, bulk start, walkthrough, activity log, AI chat.
+### Ticket Lookup
+
+<!-- ![Ticket Detail](assets/detail.gif) -->
+
+Type `DO-12345` at the prompt. Get the full picture:
+- Location breadcrumb (Site > DH > Rack > RU)
+- Status, assignee, age, SLA timers
+- NetBox device data + Grafana links
+- Linked tickets, comments, diagnostics
+- One-key actions: start, verify, hold, close
+
+</td>
+<td width="50%" valign="top">
+
+### Queue Browser
+
+<!-- ![Queue Browser](assets/queue.gif) -->
+
+Browse DO, HO, or SDA tickets filtered by site and status. Color-coded by age. Stale tickets flagged automatically.
+
+```
+1  Browse queue    DO / HO / SDA
+2  My tickets      stale > 48h flagged
+3  Watch queue     background alerts
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Setup Wizard
+
+<!-- ![Setup](assets/setup.gif) -->
+
+`cwhelper setup` walks you through everything:
+- Prompts for Jira + NetBox credentials
+- Tests API connectivity live
+- Auto-discovers your site codes from Jira
+- Offers to enable all features
+- Writes `.env` with `chmod 600`
+
+</td>
+<td width="50%" valign="top">
+
+### Doctor & Config
+
+<!-- ![Config](assets/config.gif) -->
+
+```bash
+$ cwhelper doctor
+  ✓  Python              3.12.0
+  ✓  .env file           /path/.env
+  ✓  Jira credentials    you@company.com
+  ✓  Jira API            https://org.atlassian.net
+  ✓  NetBox API          https://netbox.example.com
+  ✓  Known sites         18 configured
+  ✓  Features            17/17 enabled
+
+  All checks passed!
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Rack Map
+
+<!-- ![Rack Map](assets/rack.gif) -->
+
+ASCII data hall visualization with animated walking route to your rack. See your position on the floor without leaving the terminal.
+
+</td>
+<td width="50%" valign="top">
+
+### Shift Brief
+
+AI-generated priority summary from your live queue. Tells you what to work on first based on ticket age, SLA, and severity.
+
+```bash
+cwhelper brief --site US-EAST-03
+```
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>All 17 features</b></summary>
+
+| Feature | CLI | Menu | Dependencies |
+|---------|-----|------|-------------|
+| Ticket lookup | `DO-12345` | direct input | Jira, NetBox |
+| Queue browser | `queue` | `1` | Jira |
+| My tickets | — | `2` | Jira |
+| Queue watcher | `watch` | `3` | Jira |
+| Rack map | — | `4` | NetBox |
+| Bookmarks | — | `5` | Jira |
+| Shift brief | `brief` | `b` | Jira, AI |
+| Bulk start | — | `p` / `P` | Jira |
+| Activity log | — | `l` | Jira |
+| Walkthrough | — | `w` | Jira, NetBox |
+| Rack report | `rack-report` | `r` | Jira |
+| Code quiz | `learn` | `L` | none |
+| AI chat | — | `ai` | OpenAI |
+| Node history | `history` | — | Jira |
+| Verification | `verify` | — | Jira, NetBox |
+| IB trace | `ibtrace` | — | local topology |
+| Weekend assign | `weekend-assign` | — | Jira |
+
+</details>
 
 ---
 
@@ -83,38 +223,72 @@ Interactive-only features: rack map, bookmarks, bulk start, walkthrough, activit
 
 After opening a ticket, these hotkeys are available:
 
-| Key | Action | Key | Action |
-|-----|--------|-----|--------|
-| `r` | Rack map | `s` | Start work |
-| `n` | Connections | `v` | Verification |
-| `l` | Linked tickets | `y` | On hold |
-| `d` | Diagnostics | `z` | Resume |
-| `c` | Comments | `k` | Close |
-| `e` | Rack view | `j` | Open in Jira |
-| `f` | MRB/Parts | `g` | Open Grafana |
-| `b` | Back | `q` | Quit |
+<table>
+<tr>
+<td width="50%">
+
+**View**
+| Key | Action |
+|-----|--------|
+| `r` | Rack map + walking route |
+| `n` | Network connections |
+| `l` | Linked tickets |
+| `d` | Diagnostics |
+| `c` | Comments |
+| `e` | Rack elevation view |
+| `f` | MRB / Parts search |
+
+</td>
+<td width="50%">
+
+**Actions**
+| Key | Action |
+|-----|--------|
+| `s` | Start work (grab + In Progress) |
+| `v` | Move to Verification |
+| `y` | Put On Hold |
+| `z` | Resume (back to In Progress) |
+| `k` | Close ticket |
+| `j` | Open in Jira |
+| `g` | Open Grafana dashboard |
+
+</td>
+</tr>
+</table>
+
+**Navigation:** `b` back &nbsp; `m` menu &nbsp; `h` history &nbsp; `q` quit
 
 ---
 
-## Configuration
-
-Credentials are stored in `.env` (gitignored, never committed):
+## Troubleshooting
 
 ```bash
-cwhelper setup   # interactive wizard — recommended
-# or manually:
-cp .env.example .env
-# edit .env with your values
+cwhelper doctor    # first thing to run
 ```
 
-Features are stored in `.cwhelper_state.json` (auto-created):
+| Problem | Fix |
+|---------|-----|
+| `Missing: JIRA_EMAIL` | Run `cwhelper setup` |
+| `Jira unreachable` | Check VPN/network, verify API token |
+| `Feature disabled` | Run `cwhelper config --enable <feature>` |
+| `cwhelper: command not found` | `export PATH="$HOME/.local/bin:$PATH"` |
+| Stale version | Run `cwhelper update` |
+
+---
+
+## Development
 
 ```bash
-cwhelper config                    # view all features
-cwhelper config --enable queue     # enable a feature
-cwhelper config --disable queue    # disable a feature
-cwhelper config --enable-all       # enable everything
-cwhelper config --json             # machine-readable output
+python3 test_integrity.py    # 176 tests, all API calls mocked
+python3 test_map.py          # rack visualization tests
+```
+
+**Recording GIFs** (requires [vhs](https://github.com/charmbracelet/vhs)):
+
+```bash
+vhs assets/tapes/hero.tape       # main demo
+vhs assets/tapes/setup.tape      # setup wizard
+vhs assets/tapes/config.tape     # config + doctor
 ```
 
 ---
@@ -123,26 +297,19 @@ cwhelper config --json             # machine-readable output
 
 ```
 cwhelper/
-  cli.py            CLI entry point and subcommand routing
-  config.py         Constants, feature flags, API config
-  clients/          API clients (Jira, NetBox, Grafana)
-  services/         Business logic (queue, search, AI, verification)
-  tui/              Terminal UI (menu, display, settings, actions)
-test_integrity.py   Unit tests (176 tests, all API calls mocked)
-install.sh          One-command installer
+  cli.py              entry point + subcommand routing
+  config.py           constants, feature flags, 17-feature registry
+  clients/            API clients (Jira, NetBox, Grafana)
+  services/           business logic (queue, search, AI, verify)
+  tui/                terminal UI (menu, display, settings, actions)
+    settings.py       feature toggle Rich TUI
+    rich_console.py   shared Rich console + rendering
+test_integrity.py     176 tests, all mocked
+install.sh            one-command installer
 ```
 
 ---
 
-## Development
-
-```bash
-python3 test_integrity.py          # run tests
-python3 test_map.py                # rack visualization tests
-```
-
-All tests mock API calls -- no real Jira/NetBox requests needed.
-
----
-
-MIT
+<p align="center">
+  <sub>Built for DCT operations. MIT License.</sub>
+</p>
