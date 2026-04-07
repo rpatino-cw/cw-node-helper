@@ -3,87 +3,145 @@
 DCT terminal companion -- Jira + NetBox + Grafana queue browser for data center operations.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![Version](https://img.shields.io/badge/version-6.3.0-orange)
+![Version](https://img.shields.io/badge/version-6.5.0-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
-<!-- TODO: record hero.gif — full flow: launch → queue → pick ticket → detail view (~10s) -->
-![cwhelper demo](assets/hero.gif)
+## Quick Start
 
----
+### One-liner install
 
-## Features
+```bash
+curl -sL https://raw.githubusercontent.com/rpatino-cw/cw-node-helper/main/install.sh | bash
+```
 
-<table>
-<tr>
-<td width="50%">
+This clones the repo, installs the package, and runs the setup wizard.
 
-<!-- TODO: record queue.gif — filter by status, scroll, site picker -->
-![Queue Browser](assets/queue.gif)
-
-**Queue Browser** -- Filter, sort, and navigate your Jira queue with keyboard shortcuts.
-
-</td>
-<td width="50%">
-
-<!-- TODO: record detail.gif — ticket header, hotkey panel, field display -->
-![Ticket Detail](assets/detail.gif)
-
-**Ticket Detail** -- Where, what, which device -- answered at a glance with full hotkey panel.
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-<!-- TODO: record rack.gif — press [r], ASCII rack + DH mini-map -->
-![Rack Map](assets/rack.gif)
-
-**Rack Map** -- ASCII rack visualization and data hall mini-map. See your position in the floor.
-
-</td>
-<td width="50%">
-
-<!-- TODO: record cab.gif — [ws] grab waiting, [hg] give cab -->
-![Cab Workflow](assets/cab.gif)
-
-**Cab Workflow** -- Grab waiting tickets, give or take a whole cabinet in one move.
-
-</td>
-</tr>
-</table>
-
----
-
-## Install
+### Manual install
 
 ```bash
 git clone https://github.com/rpatino-cw/cw-node-helper.git
 cd cw-node-helper
 pip install -e .
-cp .env.example .env   # fill in your Jira + NetBox tokens
-cwhelper
+cwhelper setup    # interactive credential wizard
+cwhelper          # launch
 ```
 
-## Hotkeys
+### What you'll need
 
-| Key | Action |
-|-----|--------|
-| `q` | Queue browser |
-| `s` | Search tickets (JQL) |
-| `b` | Bookmarks |
-| `r` | Rack map + DH mini-map |
-| `c` | Connections (HO/MRB/SDx) |
-| `n` | NetBox device lookup |
-| `g` | Grab ticket |
-| `ws` | Grab waiting tickets in cab |
-| `hg` | Give cab to teammate |
-| `lg` | Link grab (bulk) |
-| `w` | Watch mode (background) |
-| `p` | Start all (own queue) |
-| `h` | History |
-| `?` | Help |
+- Python 3.10+
+- A Jira API token ([generate one here](https://id.atlassian.com/manage-profile/security/api-tokens))
+- Your Jira email address
+- (Optional) NetBox API URL and token
+
+---
+
+## Usage
+
+```
+cwhelper                          # interactive menu
+cwhelper DO-12345                 # look up a ticket
+cwhelper 10NQ724                  # search by service tag
+cwhelper queue --site US-EAST-03  # browse queue
+cwhelper setup                    # credential wizard
+cwhelper config                   # view/toggle features
+cwhelper -h                       # full help
+```
+
+At the interactive menu, type any ticket key, service tag, or hostname directly -- no submenu needed.
+
+---
+
+## Features
+
+All features can be toggled on/off individually:
+
+```bash
+cwhelper config                   # see what's enabled
+cwhelper config --enable queue    # enable one feature
+cwhelper config --enable-all      # enable everything
+```
+
+| Feature | Command | What it does |
+|---------|---------|-------------|
+| Ticket lookup | `DO-12345` | Full ticket context: Jira + NetBox + Grafana links |
+| Queue browser | `queue` | Filter by site, status, project (DO/HO/SDA) |
+| Node history | `history` | All tickets for a device by service tag or hostname |
+| Shift brief | `brief` | AI-generated priority summary for your shift |
+| Verification | `verify` | Guided verification flows (IB, BMC, power, etc.) |
+| Queue watcher | `watch` | Background poller with alerts for new tickets |
+| Rack report | `rack-report` | Tickets grouped by rack location |
+| IB trace | `ibtrace` | InfiniBand connection tracing from topology data |
+| Code quiz | `learn` | Study mode for DCT procedures |
+
+Interactive-only features: rack map, bookmarks, bulk start, walkthrough, activity log, AI chat.
+
+---
+
+## Ticket View Hotkeys
+
+After opening a ticket, these hotkeys are available:
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| `r` | Rack map | `s` | Start work |
+| `n` | Connections | `v` | Verification |
+| `l` | Linked tickets | `y` | On hold |
+| `d` | Diagnostics | `z` | Resume |
+| `c` | Comments | `k` | Close |
+| `e` | Rack view | `j` | Open in Jira |
+| `f` | MRB/Parts | `g` | Open Grafana |
+| `b` | Back | `q` | Quit |
+
+---
+
+## Configuration
+
+Credentials are stored in `.env` (gitignored, never committed):
+
+```bash
+cwhelper setup   # interactive wizard — recommended
+# or manually:
+cp .env.example .env
+# edit .env with your values
+```
+
+Features are stored in `.cwhelper_state.json` (auto-created):
+
+```bash
+cwhelper config                    # view all features
+cwhelper config --enable queue     # enable a feature
+cwhelper config --disable queue    # disable a feature
+cwhelper config --enable-all       # enable everything
+cwhelper config --json             # machine-readable output
+```
+
+---
+
+## Project Structure
+
+```
+cwhelper/
+  cli.py            CLI entry point and subcommand routing
+  config.py         Constants, feature flags, API config
+  clients/          API clients (Jira, NetBox, Grafana)
+  services/         Business logic (queue, search, AI, verification)
+  tui/              Terminal UI (menu, display, settings, actions)
+test_integrity.py   Unit tests (176 tests, all API calls mocked)
+install.sh          One-command installer
+```
+
+---
+
+## Development
+
+```bash
+python3 test_integrity.py          # run tests
+python3 test_map.py                # rack visualization tests
+```
+
+All tests mock API calls -- no real Jira/NetBox requests needed.
 
 ---
 

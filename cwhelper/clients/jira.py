@@ -18,17 +18,27 @@ __all__ = ['_get_env_or_exit', '_get_credentials', '_jira_health_check', '_jira_
 # ---------------------------------------------------------------------------
 
 def _get_env_or_exit(var_name: str) -> str:
-    """Return the value of an env var, or exit with a helpful message."""
+    """Return the value of an env var, or offer setup wizard if missing."""
     value = os.environ.get(var_name, "").strip()
     if not value:
         print(f"\n  \033[33mMissing: {var_name}\033[0m\n")
-        print(f"  To get started, copy the example config and fill in your credentials:")
-        print(f"    cp .env.example .env")
-        print(f"    # Edit .env with your Jira email + API token\n")
-        print(f"  Or export directly:")
-        print(f"    export {var_name}='your-value-here'\n")
-        print(f"  Need a Jira API token?")
-        print(f"    https://id.atlassian.com/manage-profile/security/api-tokens\n")
+        # Offer to run the setup wizard
+        try:
+            answer = input("  Run the setup wizard? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer in ("", "y", "yes"):
+            from cwhelper.cli import _cli_setup
+            _cli_setup()
+            # Re-check after setup (setup writes .env and sets env vars)
+            value = os.environ.get(var_name, "").strip()
+            if value:
+                return value
+            print(f"\n  \033[33m{var_name} still not set after setup.\033[0m")
+        else:
+            print(f"  To set up manually:")
+            print(f"    cwhelper setup")
+            print(f"    # or: export {var_name}='your-value-here'\n")
         sys.exit(1)
     return value
 
