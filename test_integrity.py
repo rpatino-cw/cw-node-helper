@@ -26,6 +26,7 @@ import get_node_context as gnc  # noqa: E402
 import cwhelper.config as _cfg  # noqa: E402
 import cwhelper.services.notifications as _notif  # noqa: E402
 import cwhelper.tui.actions as _actions  # noqa: E402
+import cwhelper.cli as _cli  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1651,6 +1652,61 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertNotIn("L", keys)
         # Separator preserved
         self.assertIn(("", "", ""), filtered)
+
+    def test_require_feature_blocks_disabled(self):
+        """_require_feature prints message and returns False when disabled."""
+        _cfg.FEATURES["queue"] = False
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a))):
+            result = _cli._require_feature("queue")
+        self.assertFalse(result)
+        self.assertIn("Feature disabled", buf.getvalue())
+
+    def test_require_feature_allows_enabled(self):
+        """_require_feature returns True when enabled."""
+        _cfg.FEATURES["queue"] = True
+        result = _cli._require_feature("queue")
+        self.assertTrue(result)
+
+    def test_cli_config_json_output(self):
+        """cwhelper config --json outputs valid JSON with all features."""
+        buf = io.StringIO()
+        import json
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a[0]) if a else "")):
+            with patch("cwhelper.state._load_user_state", return_value={"features": {}}):
+                _cli._cli_config(["--json"])
+        output = buf.getvalue()
+        data = json.loads(output)
+        self.assertIn("ticket_lookup", data)
+        self.assertEqual(len(data), len(_cfg._FEATURE_REGISTRY))
+
+    def test_cli_config_enable(self):
+        """cwhelper config --enable sets feature to True."""
+        _cfg.FEATURES["learn"] = False
+        state = {"features": {}}
+        with patch("cwhelper.state._load_user_state", return_value=state), \
+             patch("cwhelper.state._save_user_state"), \
+             patch("builtins.print"):
+            _cli._cli_config(["--enable", "learn"])
+        self.assertTrue(_cfg.FEATURES["learn"])
+
+    def test_cli_config_disable(self):
+        """cwhelper config --disable sets feature to False."""
+        _cfg.FEATURES["ticket_lookup"] = True
+        state = {"features": {}}
+        with patch("cwhelper.state._load_user_state", return_value=state), \
+             patch("cwhelper.state._save_user_state"), \
+             patch("builtins.print"):
+            _cli._cli_config(["--disable", "ticket_lookup"])
+        self.assertFalse(_cfg.FEATURES["ticket_lookup"])
+
+    def test_cli_config_invalid_feature(self):
+        """cwhelper config --enable with unknown feature prints error."""
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a))):
+            with patch("cwhelper.state._load_user_state", return_value={"features": {}}):
+                _cli._cli_config(["--enable", "nonexistent"])
+        self.assertIn("Unknown feature", buf.getvalue())
 
 
 # ===========================================================================
