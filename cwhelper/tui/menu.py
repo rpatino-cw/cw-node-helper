@@ -285,9 +285,11 @@ def _interactive_menu():
             ("6",  "Bookmarks",    ""),
             ("",   "",             ""),
             ("b",  "Shift brief",  "AI priority summary — what to work on first"),
-            ("p",  "Start all",    "bulk In Progress"),
+            ("p",  "Start all",    "bulk In Progress (my tickets)"),
+            ("P",  "Start awaiting","bulk In Progress (unassigned) → clipboard"),
             ("l",  "Activity",     "log · Jira"),
             ("w",  "Walkthrough",  "rack-by-rack DH walk"),
+            ("r",  "Rack report",  "tickets per rack"),
             ("L",  "Learn",        "code quiz game"),
         ]
 
@@ -872,6 +874,88 @@ def _interactive_menu():
             print()
             _brief_pause(1.5)
 
+        # --- P: Bulk start awaiting (unassigned) → clipboard -------------------
+        elif _raw_choice == "P":
+            _pa_site = state.get("site_filter", os.environ.get("DEFAULT_SITE", ""))
+            _pa_site_jql = f' AND cf[10194] = "{_pa_site}"' if _pa_site else ""
+            print(f"\n  {DIM}Finding unassigned awaiting DO tickets{' at ' + _pa_site if _pa_site else ''}...{RESET}", end="", flush=True)
+            try:
+                _pa_resp = _jira_post("/rest/api/3/search/jql", email, token, body={
+                    "jql": (
+                        'project = "DO" AND assignee is EMPTY '
+                        'AND statusCategory != Done '
+                        'AND status not in ("In Progress", "Verification", "Closed")'
+                        f'{_pa_site_jql}'
+                        ' ORDER BY created DESC'
+                    ),
+                    "maxResults": 50,
+                    "fields": ["key", "summary", "status"],
+                })
+                _pa_issues = _pa_resp.json().get("issues", []) if _pa_resp and _pa_resp.ok else []
+            except Exception:
+                _pa_issues = []
+            print(f"\r{'':70}\r", end="")
+
+            if not _pa_issues:
+                print(f"\n  {GREEN}No unassigned awaiting tickets found.{RESET}")
+                _brief_pause(1.5)
+                continue
+
+            print(f"\n  {BOLD}Unassigned awaiting tickets ({len(_pa_issues)}):{RESET}")
+            for _pai in _pa_issues:
+                _paf = _pai.get("fields", {})
+                _pas = _paf.get("status", {}).get("name", "?")
+                _pasum = _paf.get("summary", "")[:55]
+                print(f"    {CYAN}{_pai['key']}{RESET}  {DIM}{_pas:<20}{RESET}  {_pasum}")
+
+            try:
+                _pa_conf = input(f"\n  Start all {len(_pa_issues)} without assigning? [{GREEN}y{RESET}/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                continue
+
+            if _pa_conf != "y":
+                print(f"  {DIM}Cancelled.{RESET}")
+                _brief_pause()
+                continue
+
+            _pa_ok = 0
+            _pa_fail = 0
+            _pa_started = []
+            for _pai in _pa_issues:
+                _pactx = {"issue_key": _pai["key"], "_transitions": None}
+                print(f"  {DIM}Starting {_pai['key']}...{RESET}", end="", flush=True)
+                if _execute_transition(_pactx, "start", email, token):
+                    print(f"\r  {GREEN}{BOLD}✓{RESET} {_pai['key']} → In Progress          ")
+                    _pa_ok += 1
+                    _pa_started.append((_pai["key"], _pai.get("fields", {}).get("summary", "")))
+                else:
+                    print(f"\r  {YELLOW}✗{RESET} {_pai['key']} — could not start        ")
+                    _pa_fail += 1
+
+            if _pa_ok:
+                _log_event("bulk_start_awaiting", "", "", f"{_pa_ok} unassigned tickets started")
+
+            print(f"\n  {GREEN}{BOLD}{_pa_ok} started{RESET}", end="")
+            if _pa_fail:
+                print(f"  {YELLOW}{_pa_fail} failed{RESET}", end="")
+            print()
+
+            # Build compact Slack list and copy to clipboard
+            if _pa_started:
+                _pa_lines = [f"Started {len(_pa_started)} awaiting DO tickets → In Progress:"]
+                for _pak, _pasum in _pa_started:
+                    _pa_lines.append(f"• {_pak} — {_pasum[:60]}")
+                _pa_text = "\n".join(_pa_lines)
+                try:
+                    import subprocess
+                    subprocess.run(["pbcopy"], input=_pa_text.encode(), check=True)
+                    print(f"\n  {GREEN}Copied to clipboard — paste in Slack.{RESET}")
+                except Exception:
+                    print(f"\n  {DIM}Could not copy — here's the list:{RESET}")
+                    print(f"\n{_pa_text}\n")
+            _brief_pause(1.5)
+
         # --- L: Learn mode (code quiz game) ------------------------------------
         elif _raw_choice == "L":
             _run_learn_mode()
@@ -915,6 +999,21 @@ def _interactive_menu():
                         input(f"\n  {DIM}Press ENTER to return...{RESET}")
                     else:
                         break
+                _clear_screen()
+
+        # --- r: Rack report (tickets per rack breakdown) ----------------------
+        elif choice == "r":
+            filters = _ask_queue_filters()
+            if filters:
+                from cwhelper.services.rack_report import _run_rack_report
+                _run_rack_report(email, token, filters["site"],
+                                 status_filter=filters["status_filter"],
+                                 project="DO",
+                                 limit=200)
+                try:
+                    input(f"\n  {DIM}Press ENTER to return to menu...{RESET}")
+                except (EOFError, KeyboardInterrupt):
+                    pass
                 _clear_screen()
 
         # --- w: Walkthrough mode (rack-by-rack DH walk with annotations) ------

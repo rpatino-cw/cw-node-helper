@@ -243,23 +243,38 @@ def _parse_iface_speed(nb_type) -> str:
 def _build_netbox_context(service_tag: str | None,
                           node_name: str | None,
                           hostname: str | None,
-                          rack_location: str | None = None) -> dict:
+                          rack_location: str | None = None,
+                          jira_site: str | None = None) -> dict:
     """Query NetBox for device info and interfaces. Returns a dict.
 
     This is called during context building. If NetBox is not configured
     or the device isn't found, returns an empty dict (no error).
     Results are cached in-memory by lookup args.
+
+    If *jira_site* is provided and the device found by serial/name lives at
+    a different site, discard the match and fall through to rack_location
+    lookups so the ticket opens the correct NetBox device.
     """
     from cwhelper.services.context import _parse_rack_location, _short_device_name  # late import (avoid circular)
     if not _netbox_available():
         return {}
 
     # Check NetBox cache
-    cache_key = f"{service_tag}|{node_name}|{hostname}|{rack_location}"
+    cache_key = f"{service_tag}|{node_name}|{hostname}|{rack_location}|{jira_site}"
     if cache_key in _cfg._netbox_cache:
         return _cfg._netbox_cache[cache_key]
 
     device = _netbox_find_device(serial=service_tag, name=node_name or hostname)
+
+    # Site validation: if Jira says a different site, the serial/name matched
+    # the wrong device (asset moved, data mismatch). Drop it and try positional.
+    if device and jira_site:
+        nb_site_obj = device.get("site") or {}
+        nb_slug = (nb_site_obj.get("slug") or "").lower().replace("-", "")
+        jira_norm = jira_site.lower().replace("-", "").replace("_", "")
+        if nb_slug and jira_norm and nb_slug != jira_norm:
+            device = None  # discard — fall through to rack_location
+
     # Fallback: if rack_location looks like a hostname, try it as a device name
     if not device and rack_location and "." not in rack_location and "-" in rack_location:
         device = _netbox_find_device(name=rack_location)

@@ -1,7 +1,9 @@
 """Queue browser and history search."""
 from __future__ import annotations
 
+import os
 import re
+import sys
 import time
 
 import json
@@ -19,6 +21,48 @@ from cwhelper.tui.display import _clear_screen, _print_pretty, _prompt_select, _
 from cwhelper.tui.rich_console import _rich_print_queue_table, _rich_queue_prompt, console
 from cwhelper.services.session_log import _log_event
 # _post_detail_prompt imported lazily inside functions to avoid circular import
+
+
+def _read_key():
+    """Read a single keypress (including arrow keys) in raw mode.
+
+    Returns one of: 'up', 'down', 'space', 'enter', 'q', 'a', 'n', 'y', 'm',
+    or the literal character pressed. Returns None on failure / non-tty.
+    """
+    try:
+        import tty
+        import termios
+    except ImportError:
+        return None
+    if not sys.stdin.isatty():
+        return None
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == '\x1b':
+            ch2 = sys.stdin.read(1)
+            if ch2 == '[':
+                ch3 = sys.stdin.read(1)
+                if ch3 == 'A':
+                    return 'up'
+                elif ch3 == 'B':
+                    return 'down'
+                return None
+            return 'q'  # bare Esc = quit
+        elif ch == ' ':
+            return 'space'
+        elif ch in ('\r', '\n'):
+            return 'enter'
+        elif ch == '\x03':  # Ctrl-C
+            return 'q'
+        else:
+            return ch.lower()
+    except (OSError, ValueError):
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 
@@ -211,6 +255,30 @@ def _run_queue_interactive(email: str, token: str, site: str,
         "assignee": "Assignee (A→Z)",
     }
 
+    def _extract_rack_num(f: dict) -> int | None:
+        """Extract rack number from all available ticket fields."""
+        rack_loc = str(f.get("customfield_10207") or "")
+        hostname = str(f.get("customfield_10192") or "")
+        summary = str(f.get("summary") or "")
+        desc_raw = f.get("description") or ""
+        if isinstance(desc_raw, dict):
+            _dp = []
+            for _b in desc_raw.get("content", []):
+                for _i in _b.get("content", []):
+                    if _i.get("type") == "text":
+                        _dp.append(_i.get("text", ""))
+            desc_text = " ".join(_dp)
+        else:
+            desc_text = str(desc_raw)
+        m = (re.search(r'\.R(\d+)\.', rack_loc)
+             or re.search(r':(\d+)(?::|$)', rack_loc)
+             or re.search(r'\bR(\d+)\b', rack_loc, re.IGNORECASE)
+             or re.search(r'\br(\d+)\b', hostname, re.IGNORECASE)
+             or re.search(r'\bR(\d+)\b', summary, re.IGNORECASE)
+             or re.search(r'\.R(\d+)(?:\.|$)', desc_text)
+             or re.search(r'\bR(\d+)\b', desc_text, re.IGNORECASE))
+        return int(m.group(1)) if m else None
+
     def _apply_col_filters(lst: list) -> list:
         out = []
         for iss in lst:
@@ -220,11 +288,9 @@ def _run_queue_interactive(email: str, token: str, site: str,
             assignee_obj = f.get("assignee")
             asgn = (assignee_obj.get("displayName", "") if isinstance(assignee_obj, dict)
                     else str(assignee_obj or "")).lower()
-            rack_loc = str(f.get("customfield_10207") or "")
+            rack_num = _extract_rack_num(f)
             hostname = str(f.get("customfield_10192") or "")
-            rack_m = re.search(r'\.R(\d+)\.', rack_loc)
             node_m = re.search(r'-node-(\d+)', hostname)
-            rack_num = int(rack_m.group(1)) if rack_m else None
             node_num = int(node_m.group(1)) if node_m else None
 
             if "status" in _col_filters and _col_filters["status"].lower() not in st_name:
@@ -258,8 +324,7 @@ def _run_queue_interactive(email: str, token: str, site: str,
     def _apply_sort(lst: list) -> list:
         def _rack_key(iss):
             f = iss.get("fields") or {}
-            m = re.search(r'\.R(\d+)\.', str(f.get("customfield_10207") or ""))
-            return int(m.group(1)) if m else 9999
+            return _extract_rack_num(f) or 9999
 
         def _node_key(iss):
             f = iss.get("fields") or {}
@@ -358,11 +423,10 @@ def _run_queue_interactive(email: str, token: str, site: str,
         _hints = ["* bookmark" if not _q_bookmarked else "* remove bookmark"]
         if len(issues) >= limit:
             _hints += ["n next page", "a load all"]
-        _hints += ["f filter", "s sort"]
+        _hints += ["f filter", "s sort", "R rack report"]
         if _col_filters or _sort_by != "created":
             _hints.append("r reset")
-        if mine_only:
-            _hints.append("p start all")
+        _hints.append("p start all")
 
         raw = _rich_queue_prompt(len(issues), extra_hints=_hints)
 
@@ -378,6 +442,8 @@ def _run_queue_interactive(email: str, token: str, site: str,
                 return None
             if raw_input.lower() == "ai":
                 return "ai"
+            if raw_input == "R":
+                return "R"  # uppercase R = rack report (distinct from lowercase r = reset)
             if raw_input.lower() in ("x", "n", "a", "e", "f", "s", "r", "l", "p") or raw_input == "*":
                 return raw_input
             try:
@@ -435,7 +501,20 @@ def _run_queue_interactive(email: str, token: str, site: str,
             _sort_by = "created"
             continue
 
-        if chosen == "p" and mine_only:
+        if chosen == "R":
+            # Rack report — jump straight from queue view
+            from cwhelper.services.rack_report import _run_rack_report
+            _run_rack_report(email, token, site,
+                             status_filter=status_filter,
+                             project=project,
+                             limit=200)
+            try:
+                input(f"\n  {DIM}Press ENTER to return to queue...{RESET}")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            continue  # back to queue, not menu
+
+        if chosen == "p":
             # Bulk start — transition all startable tickets to In Progress
             _startable = [
                 iss for iss in issues
@@ -447,42 +526,216 @@ def _run_queue_interactive(email: str, token: str, site: str,
                 _brief_pause(1.5)
                 continue
 
-            print(f"\n  {BOLD}Tickets to start ({len(_startable)}):{RESET}")
-            for _pi in _startable:
-                _pf = _pi.get("fields", {})
-                _ps = _pf.get("status", {}).get("name", "?")
-                _psummary = _pf.get("summary", "")[:55]
-                print(f"    {CYAN}{_pi['key']}{RESET}  {DIM}{_ps:<20}{RESET}  {_psummary}")
-
-            try:
-                _pconf = input(f"\n  Start all {len(_startable)}? [{GREEN}y{RESET}/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-
-            if _pconf != "y":
-                print(f"  {DIM}Cancelled.{RESET}")
-                _brief_pause()
-                continue
-
-            _p_ok = _p_fail = 0
-            for _pi in _startable:
-                _pctx = {"issue_key": _pi["key"], "_transitions": None}
-                print(f"  {DIM}Starting {_pi['key']}...{RESET}", end="", flush=True)
-                if _execute_transition(_pctx, "start", email, token):
-                    print(f"\r  {GREEN}{BOLD}✓{RESET} {_pi['key']} → In Progress          ")
-                    _p_ok += 1
+            # --- Compact preview grouped by location ---
+            def _loc_from_issue(iss):
+                """Extract (site, DH, Rack) from rack_location + site fields."""
+                _f = iss.get("fields") or {}
+                _rl = str(_f.get("customfield_10207") or "")
+                _site_raw = _f.get("customfield_10194") or ""
+                if isinstance(_site_raw, dict):
+                    _site_raw = _site_raw.get("value", "") or _site_raw.get("name", "")
+                _site = str(_site_raw).strip() or "?"
+                _dh = "?"
+                _rack = "?"
+                _dh_m = re.search(r'(DH\d+)', _rl, re.IGNORECASE)
+                if _dh_m:
+                    _dh = _dh_m.group(1).upper()
+                _r_m = re.search(r'\bR(\d+)\b', _rl, re.IGNORECASE)
+                if not _r_m:
+                    _r_m = _extract_rack_num(_f)
+                    if _r_m is not None:
+                        _rack = f"R{_r_m}"
                 else:
-                    print(f"\r  {YELLOW}✗{RESET} {_pi['key']} — could not start        ")
-                    _p_fail += 1
+                    _rack = f"R{_r_m.group(1)}"
+                return _site, _dh, _rack
 
-            if _p_ok:
-                _log_event("bulk_start", "", "", f"{_p_ok} tickets started from queue")
-            print(f"\n  {GREEN}{BOLD}{_p_ok} started{RESET}", end="")
-            if _p_fail:
-                print(f"  {YELLOW}{_p_fail} failed{RESET}", end="")
-            print()
-            _brief_pause()
+            # Build per-location groups
+            from collections import OrderedDict
+            _loc_groups = OrderedDict()
+            for _pi in _startable:
+                _site, _dh, _rack = _loc_from_issue(_pi)
+                _loc_key = (_site, _dh, _rack)
+                _loc_groups.setdefault(_loc_key, []).append(_pi)
+
+            # --- Flat indexed list for interactive picking ---
+            _pick_list = []  # [(index, issue, site, dh, rack)]
+            for (_site, _dh, _rack), _grp in _loc_groups.items():
+                for _pi in _grp:
+                    _pick_list.append((len(_pick_list) + 1, _pi, _site, _dh, _rack))
+            # --- Auto-select DEFAULT_SITE tickets if env is set ---
+            _default_site = os.environ.get("DEFAULT_SITE", "").strip()
+            if _default_site:
+                _my_site_idx = set(
+                    i for i, _, s, _, _ in _pick_list
+                    if s.lower() == _default_site.lower()
+                    or re.sub(r'^US-', '', s).lower() == re.sub(r'^US-', '', _default_site).lower()
+                )
+                if _my_site_idx:
+                    _selected = _my_site_idx
+                else:
+                    _selected = set(i for i, *_ in _pick_list)  # fallback: all
+            else:
+                _selected = set(i for i, *_ in _pick_list)  # all selected by default
+
+            _cursor = 1  # 1-indexed cursor position for arrow-key nav
+            _use_raw = sys.stdin.isatty()  # arrow keys only work in a real terminal
+
+            # --- Helper: match a site name loosely ---
+            def _match_site(query, site_val):
+                if site_val == "?":
+                    return False
+                q = query.lower().strip()
+                s = site_val.lower()
+                return q == s or q == re.sub(r'^us-', '', s)
+
+            # --- Interactive pick loop ---
+            while True:
+                _clear_screen()
+                _sel_count = len(_selected)
+                _mode_hint = f"  {DIM}(arrow keys + space to toggle, enter to start){RESET}" if _use_raw else ""
+                print(f"\n  {BOLD}Bulk Start — {_sel_count}/{len(_pick_list)} selected{RESET}{_mode_hint}\n")
+                for _idx, _pi, _site, _dh, _rack in _pick_list:
+                    _pf = _pi.get("fields") or {}
+                    _tag = str(_pf.get("customfield_10193") or "")[:18] or _pi.get("key", "?")
+                    _check = f"{GREEN}■{RESET}" if _idx in _selected else f"{DIM}□{RESET}"
+                    _num = f"{WHITE}{_idx:>2}{RESET}"
+                    _row_dim = "" if _idx in _selected else DIM
+                    _cur_marker = f"{CYAN}▸{RESET}" if _idx == _cursor and _use_raw else " "
+                    print(f"  {_cur_marker}{_check} {_num}  {_row_dim}{YELLOW}{_site:<16}{RESET} {_row_dim}{CYAN}{_dh:<5}{RESET} {_row_dim}{WHITE}{_rack:<5}{RESET} {_row_dim}{DIM}{_tag}{RESET}")
+
+                # Summary line
+                _site_sel = sorted(set(s for i, _, s, _, _ in _pick_list if i in _selected and s != "?"))
+                _dh_sel = sorted(set(dh for i, _, _, dh, _ in _pick_list if i in _selected and dh != "?"))
+                _rack_sel = sorted(set(r for i, _, _, _, r in _pick_list if i in _selected and r != "?"),
+                                   key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0)
+                _sum_parts = []
+                if _site_sel:
+                    _sum_parts.append(f"Sites: {', '.join(_site_sel)}")
+                if _dh_sel:
+                    _sum_parts.append(f"Halls: {', '.join(_dh_sel)}")
+                if _rack_sel:
+                    _sum_parts.append(f"Racks: {', '.join(_rack_sel)}")
+                if _sum_parts:
+                    print(f"\n  {BOLD}{' · '.join(_sum_parts)}{RESET}")
+
+                # Available halls and sites for filter hints — include KNOWN_SITES
+                _all_halls = sorted(set(dh for _, _, _, dh, _ in _pick_list if dh != "?"))
+                _all_sites = sorted(set(s for _, _, s, _, _ in _pick_list if s != "?"))
+                # Merge KNOWN_SITES into the hint so user sees their site even if no tickets
+                _hint_sites = sorted(set(_all_sites) | set(KNOWN_SITES))
+                _filter_hints = []
+                if _all_halls:
+                    _filter_hints.append(f"hall: {'/'.join(_all_halls)}")
+                if _hint_sites:
+                    _short_sites = [re.sub(r'^US-', '', s) for s in _hint_sites]
+                    _filter_hints.append(f"site: {'/'.join(_short_sites)}")
+                _filter_line = f"  Filter: {' · '.join(_filter_hints)}" if _filter_hints else ""
+                _my_site_hint = f"  [m]y site ({re.sub(r'^US-', '', _default_site)})" if _default_site else ""
+                if _use_raw:
+                    print(f"\n  {DIM}↑↓ move  SPACE toggle  ENTER start  [a]ll  [n]one{_my_site_hint}  [q] cancel{RESET}")
+                else:
+                    print(f"\n  {DIM}Toggle: [1-{len(_pick_list)}]  [a]ll  [n]one{_my_site_hint}  [y] start  [q] cancel{RESET}")
+                if _filter_line:
+                    print(f"  {DIM}{_filter_line}{RESET}")
+
+                # --- Read input ---
+                if _use_raw:
+                    _key = _read_key()
+                    if _key is None:
+                        _use_raw = False  # fall back to line input next loop
+                        continue
+                    _pcmd = _key
+                else:
+                    try:
+                        _pcmd = input(f"\n  > ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        _pcmd = "q"
+
+                # --- Handle arrow-key navigation ---
+                if _pcmd == 'up':
+                    _cursor = max(1, _cursor - 1)
+                    continue
+                elif _pcmd == 'down':
+                    _cursor = min(len(_pick_list), _cursor + 1)
+                    continue
+                elif _pcmd == 'space':
+                    _selected.symmetric_difference_update({_cursor})
+                    # auto-advance cursor after toggle
+                    if _cursor < len(_pick_list):
+                        _cursor += 1
+                    continue
+                elif _pcmd == 'enter':
+                    _pcmd = 'y'  # treat enter as confirm
+
+                if _pcmd == "q":
+                    print(f"  {DIM}Cancelled.{RESET}")
+                    _brief_pause()
+                    break
+                elif _pcmd == "a":
+                    _selected = set(i for i, *_ in _pick_list)
+                elif _pcmd == "n":
+                    _selected.clear()
+                elif _pcmd == "m" and _default_site:
+                    # My site — select only tickets matching DEFAULT_SITE
+                    _my = set(i for i, _, s, _, _ in _pick_list if _match_site(_default_site, s))
+                    if _my:
+                        _selected = _my
+                    else:
+                        print(f"  {YELLOW}No tickets for {_default_site} in this batch.{RESET}")
+                        _brief_pause(1)
+                elif _pcmd.startswith("dh") and _pcmd.upper() in {dh for _, _, _, dh, _ in _pick_list if dh != "?"}:
+                    # Hall filter — select only tickets matching this hall
+                    _filt_dh = _pcmd.upper()
+                    _selected = set(i for i, _, _, dh, _ in _pick_list if dh == _filt_dh)
+                elif any(_match_site(_pcmd, s) for _, _, s, _, _ in _pick_list):
+                    # Site filter — select only tickets matching this site
+                    _filt_site = None
+                    for _, _, s, _, _ in _pick_list:
+                        if _match_site(_pcmd, s):
+                            _filt_site = s
+                            break
+                    if _filt_site:
+                        _selected = set(i for i, _, s, _, _ in _pick_list if s == _filt_site)
+                elif _pcmd == "y":
+                    if not _selected:
+                        print(f"  {YELLOW}Nothing selected.{RESET}")
+                        _brief_pause(1)
+                        continue
+                    # Execute transitions on selected tickets
+                    _to_start = [pi for idx, pi, *_ in _pick_list if idx in _selected]
+                    _p_ok = _p_fail = 0
+                    print()
+                    for _pi in _to_start:
+                        _pctx = {"issue_key": _pi["key"], "_transitions": None}
+                        print(f"  {DIM}Starting {_pi['key']}...{RESET}", end="", flush=True)
+                        if _execute_transition(_pctx, "start", email, token):
+                            print(f"\r  {GREEN}{BOLD}✓{RESET} {_pi['key']} → In Progress          ")
+                            _p_ok += 1
+                        else:
+                            print(f"\r  {YELLOW}✗{RESET} {_pi['key']} — could not start        ")
+                            _p_fail += 1
+
+                    if _p_ok:
+                        _log_event("bulk_start", "", "", f"{_p_ok}/{len(_to_start)} tickets started from queue")
+                    print(f"\n  {GREEN}{BOLD}{_p_ok} started{RESET}", end="")
+                    if _p_fail:
+                        print(f"  {YELLOW}{_p_fail} failed{RESET}", end="")
+                    print()
+                    _brief_pause()
+                    break
+                else:
+                    # Try parsing as number(s) — supports "3", "1 5 7", "2,4,6", "3-8"
+                    _toggled = set()
+                    for _part in re.split(r'[\s,]+', _pcmd):
+                        _range_m = re.match(r'^(\d+)-(\d+)$', _part)
+                        if _range_m:
+                            _lo, _hi = int(_range_m.group(1)), int(_range_m.group(2))
+                            _toggled.update(range(_lo, _hi + 1))
+                        elif _part.isdigit():
+                            _toggled.add(int(_part))
+                    for _t in _toggled:
+                        if 1 <= _t <= len(_pick_list):
+                            _selected.symmetric_difference_update({_t})
             continue  # re-fetch to show updated statuses
 
         if chosen == "s":

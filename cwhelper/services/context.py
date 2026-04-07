@@ -681,7 +681,8 @@ def _build_context(identifier: str, issue: dict,
     if _netbox_available():
         netbox_future = _cfg._executor.submit(
             _build_netbox_context, service_tag, node_name, hostname,
-            rack_location=custom.get("rack_location")
+            rack_location=custom.get("rack_location"),
+            jira_site=custom.get("site"),
         )
     sla_future = _cfg._executor.submit(_fetch_sla, identifier, email, token) if email else None
 

@@ -172,6 +172,7 @@ def _search_queue(site: str, email: str, token: str,
         "customfield_10192",   # hostname
         "customfield_10194",   # site
         "assignee", "created", "updated", "statuscategorychangedate",
+        "description",
     ]
 
     if not _site_escaped:

@@ -82,6 +82,11 @@ def main():
         _cli_verify(raw_args[1:])
         return
 
+    # "rack-report" subcommand — tickets grouped by rack
+    if raw_args[0] == "rack-report":
+        _cli_rack_report(raw_args[1:])
+        return
+
     # "learn" subcommand — code quiz game
     if raw_args[0] == "learn":
         _run_learn_mode()
@@ -110,6 +115,7 @@ def _print_cli_help():
     python3 get_node_context.py watch --site <SITE>       # live queue watcher
     python3 get_node_context.py weekend-assign --site <SITE> --group <GROUP>
     python3 get_node_context.py learn                            # code quiz game
+    cwhelper rack-report --site <SITE>                   # tickets per rack
     python3 get_node_context.py verify <identifier> [--type TYPE]
     cwhelper ibtrace <switch> [port]                   # IB connection trace
 
@@ -154,6 +160,14 @@ def _print_cli_help():
     --type, -t      Force flow: ib, bmc, dpu, power, drive, rma (auto-detects from ticket)
     --json          Output structured JSON result
 
+  RACK-REPORT OPTIONS
+    --site, -s      Site to filter (e.g. US-EAST-03). Omit for all sites
+    --status        open, closed, verification, "in progress", waiting, all
+    --project, -p   DO or HO (default: DO)
+    --mine, -m      Only your tickets
+    --limit, -l     Max tickets to fetch (default: 200)
+    --json          Output as JSON
+
   IBTRACE OPTIONS
     <switch>        Switch name (S8.3.2, L10.1.2-DH2, C1.4) or bare ID (8.3.2)
     [port]          Optional port (22/1, IBP3)
@@ -175,6 +189,8 @@ def _print_cli_help():
     python3 get_node_context.py watch --site US-EAST-03 -i 180          # every 3 min
     python3 get_node_context.py weekend-assign -s US-EAST-03 -g dct-ops              # auto-assign
     python3 get_node_context.py weekend-assign -s US-EAST-03 -g dct-ops --dry-run --force
+    cwhelper rack-report --site US-EAST-03                               # which racks have most tickets
+    cwhelper rack-report --site US-EAST-03 --status all --json           # full JSON breakdown
     python3 get_node_context.py verify DO-96947                          # auto-detect flow
     python3 get_node_context.py verify DO-96947 --type power             # force power flow
     python3 get_node_context.py verify ss943425x5109244 --type bmc       # by serial
@@ -327,6 +343,29 @@ def _cli_verify(args_list: list):
     args = parser.parse_args(args_list)
 
     run_verify(args.identifier, flow_type=args.flow_type, json_mode=args.json_mode)
+
+
+def _cli_rack_report(args_list: list):
+    """Handle: cwhelper rack-report [--site SITE] [--status STATUS] [--project P] [--json]"""
+    parser = argparse.ArgumentParser(prog="cwhelper rack-report")
+    parser.add_argument("--site", "-s", default="",
+                        help="site filter (e.g. US-EAST-03). Omit for all sites")
+    parser.add_argument("--mine", "-m", action="store_true")
+    parser.add_argument("--limit", "-l", type=int, default=200,
+                        help="max tickets to fetch (default: 200)")
+    parser.add_argument("--status", default="open",
+                        help="open, closed, verification, 'in progress', waiting, all")
+    parser.add_argument("--project", "-p", default="DO",
+                        help="DO or HO (default: DO)")
+    parser.add_argument("--json", action="store_true", dest="json_mode")
+    args = parser.parse_args(args_list)
+
+    email, token = _get_credentials()
+
+    from cwhelper.services.rack_report import _run_rack_report
+    _run_rack_report(email, token, args.site, mine_only=args.mine,
+                     limit=args.limit, status_filter=args.status,
+                     project=args.project.upper(), json_mode=args.json_mode)
 
 
 def _cli_ibtrace(args_list: list):

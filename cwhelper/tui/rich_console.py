@@ -199,6 +199,20 @@ def _rich_print_ticket(ctx: dict):
 
     console.print(node_table)
 
+    # --- Hostname/site mismatch warning ---
+    site = ctx.get("site", "")
+    if hn and site:
+        # Extract site slug from hostname (e.g., "ca-east-01a" from "dh1000-r199-...-ca-east-01a")
+        # Compare against the ticket's site field
+        _site_lower = site.lower().replace("-", "").replace("_", "")
+        _hn_lower = hn.lower()
+        # Check common site indicators in hostname that don't match the ticket site
+        _hn_site_m = re.search(r'-((?:us|ca|eu|ap|sa)-[a-z]+-\d+[a-z]?)$', _hn_lower)
+        if _hn_site_m:
+            _hn_site = _hn_site_m.group(1).replace("-", "")
+            if _hn_site != _site_lower and _hn_site not in _site_lower and _site_lower not in _hn_site:
+                console.print(f"  [bold red]⚠ SITE MISMATCH[/]  hostname → [cyan]{_hn_site_m.group(1)}[/]  ticket → [cyan]{site}[/]")
+
     # --- RMA reason ---
     if ctx.get("rma_reason") or ctx.get("node_name"):
         console.print(Rule(style="dim"))
@@ -344,8 +358,34 @@ def _rich_print_queue_table(issues: list, title: str = "", page_info: str = ""):
 
         rack_loc = _safe(f.get("customfield_10207"), "")
         hostname = _safe(f.get("customfield_10192"), "")
-        # Handle dot format (US-EVI01.DH1.R317.RU26) and colon format (US-EVI01:dh1:317:26)
-        rack_m   = re.search(r"\.R(\d+)(?:\.|$)", rack_loc) or re.search(r":(\d+)(?::|$)", rack_loc)
+        summary  = _safe(f.get("summary"), "")
+        desc_raw = f.get("description") or ""
+        # Jira Cloud returns description as ADF (dict); extract text from it
+        if isinstance(desc_raw, dict):
+            _desc_parts = []
+            for _blk in desc_raw.get("content", []):
+                for _inl in _blk.get("content", []):
+                    if _inl.get("type") == "text":
+                        _desc_parts.append(_inl.get("text", ""))
+            desc_text = " ".join(_desc_parts)
+        else:
+            desc_text = str(desc_raw)
+        # Extract rack number from multiple formats:
+        #   dot:   US-EVI01.DH1.R317.RU26
+        #   colon: US-EVI01:dh1:317:26
+        #   bare:  R307 or r307 anywhere in the string
+        #   hostname: dh1000-r199-nvl-mgmt-...
+        #   summary:  "DH2 › R64 › RU10" or "DH2 > R64 > RU10"
+        #   description: rack info embedded in ticket body
+        rack_m = (
+            re.search(r"\.R(\d+)(?:\.|$)", rack_loc)
+            or re.search(r":(\d+)(?::|$)", rack_loc)
+            or re.search(r"\bR(\d+)\b", rack_loc, re.IGNORECASE)
+            or re.search(r"\br(\d+)\b", hostname, re.IGNORECASE)
+            or re.search(r"\bR(\d+)\b", summary, re.IGNORECASE)
+            or re.search(r"\.R(\d+)(?:\.|$)", desc_text)
+            or re.search(r"\bR(\d+)\b", desc_text, re.IGNORECASE)
+        )
         node_m   = re.search(r"-node-(\d+)", hostname)
         loc_parts = []
         if rack_m:
