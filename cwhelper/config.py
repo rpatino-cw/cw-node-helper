@@ -425,7 +425,7 @@ _DEFAULT_STATE = {
 
 _FEATURE_REGISTRY = {
     "ticket_lookup":   {"label": "Ticket lookup",              "cli_cmd": None,             "menu_keys": [],         "deps": ["jira", "netbox"], "default": True},
-    "queue":           {"label": "Queue browser",              "cli_cmd": "queue",          "menu_keys": ["1"],      "deps": ["jira"],           "default": False},
+    "queue":           {"label": "Queue browser",              "cli_cmd": "queue",          "menu_keys": ["1"],      "deps": ["jira"],           "default": True},
     "my_tickets":      {"label": "My tickets",                 "cli_cmd": None,             "menu_keys": ["2"],      "deps": ["jira"],           "default": False},
     "node_history":    {"label": "Node history",               "cli_cmd": "history",        "menu_keys": [],         "deps": ["jira"],           "default": False},
     "shift_brief":     {"label": "Shift brief",               "cli_cmd": "brief",          "menu_keys": ["b"],      "deps": ["jira", "ai"],     "default": False},

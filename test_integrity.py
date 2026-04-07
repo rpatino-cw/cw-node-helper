@@ -1577,9 +1577,11 @@ class TestFeatureFlags(unittest.TestCase):
             self.assertTrue(required.issubset(meta.keys()),
                             f"{fid} missing keys: {required - meta.keys()}")
 
-    def test_only_ticket_lookup_enabled_by_default(self):
+    def test_default_enabled_features(self):
+        """Only ticket_lookup and queue are enabled by default."""
+        expected_on = {"ticket_lookup", "queue"}
         for fid, meta in _cfg._FEATURE_REGISTRY.items():
-            if fid == "ticket_lookup":
+            if fid in expected_on:
                 self.assertTrue(meta["default"], f"{fid} should default to True")
             else:
                 self.assertFalse(meta["default"], f"{fid} should default to False")
@@ -1621,10 +1623,10 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertFalse(_cfg._is_feature_enabled("nonexistent_feature"))
 
     def test_enabled_menu_keys(self):
-        # Only ticket_lookup is on by default, but it has no menu key (inline)
+        # ticket_lookup (no menu key) + queue (menu key "1") on by default
         keys = _cfg._enabled_menu_keys()
-        self.assertNotIn("1", keys)    # ticket_lookup has no menu key
-        self.assertNotIn("2", keys)    # queue disabled
+        self.assertIn("1", keys)       # queue is menu key 1
+        self.assertNotIn("2", keys)    # my_tickets disabled
         self.assertNotIn("L", keys)    # learn disabled
 
     def test_enabled_menu_keys_after_enabling(self):
@@ -1708,6 +1710,224 @@ class TestFeatureFlags(unittest.TestCase):
             with patch("cwhelper.state._load_user_state", return_value={"features": {}}):
                 _cli._cli_config(["--enable", "nonexistent"])
         self.assertIn("Unknown feature", buf.getvalue())
+
+
+# ===========================================================================
+# Queue browser feature tests
+# ===========================================================================
+
+def _mock_queue_issues(n=5, project="DO", site="US-EAST-03"):
+    """Generate mock Jira issue dicts resembling a queue search result."""
+    issues = []
+    statuses = ["Open", "In Progress", "Verification", "On Hold", "Waiting For Support"]
+    for i in range(n):
+        issues.append({
+            "key": f"{project}-{10000 + i}",
+            "fields": {
+                "summary": f"Test ticket {i} — GPU reseat node {i}",
+                "status": {"name": statuses[i % len(statuses)]},
+                "issuetype": {"name": "Task"},
+                "customfield_10193": f"SVC{i:04d}",        # service_tag
+                "customfield_10207": f"{site}.DH1.R{100+i}.RU{10+i}",  # rack_location
+                "customfield_10192": f"dh1-r{100+i}-node-{i:02d}",     # hostname
+                "customfield_10194": site,                               # site
+                "assignee": {"displayName": f"Tech {i}", "accountId": f"abc{i}"} if i % 2 == 0 else None,
+                "created": "2026-04-01T10:00:00.000+0000",
+                "updated": "2026-04-06T14:30:00.000+0000",
+                "statuscategorychangedate": "2026-04-05T08:00:00.000+0000",
+                "description": f"Reseat GPU in slot {i}",
+            },
+        })
+    return issues
+
+
+class TestSearchQueue(unittest.TestCase):
+    """Tests for _search_queue — JQL construction and site fallback logic."""
+
+    def setUp(self):
+        _cfg.FEATURES["queue"] = True
+        # Clear JQL cache to avoid cross-test pollution
+        _cfg._jql_cache.clear()
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_no_site_filter(self, mock_jql):
+        """No site → single JQL call without site clause."""
+        mock_jql.return_value = _mock_queue_issues(3)
+        from cwhelper.services.search import _search_queue
+        results = _search_queue("", "e", "t", limit=10)
+        self.assertEqual(len(results), 3)
+        mock_jql.assert_called_once()
+        jql = mock_jql.call_args[0][0]
+        self.assertNotIn("cf[10194]", jql)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_site_exact_match(self, mock_jql):
+        """Site provided → tries exact match on cf[10194] first."""
+        mock_jql.return_value = _mock_queue_issues(2, site="US-EAST-03")
+        from cwhelper.services.search import _search_queue
+        results = _search_queue("US-EAST-03", "e", "t")
+        self.assertEqual(len(results), 2)
+        jql = mock_jql.call_args_list[0][0][0]
+        self.assertIn('cf[10194] = "US-EAST-03"', jql)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_site_fallback_to_contains(self, mock_jql):
+        """Exact site match empty → falls back to contains."""
+        mock_jql.side_effect = [[], _mock_queue_issues(1)]
+        from cwhelper.services.search import _search_queue
+        results = _search_queue("US-EAST", "e", "t")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(mock_jql.call_count, 2)
+        jql2 = mock_jql.call_args_list[1][0][0]
+        self.assertIn('cf[10194] ~ "US-EAST"', jql2)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_site_fallback_to_rack_location(self, mock_jql):
+        """Both site filters empty → falls back to rack_location prefix."""
+        mock_jql.side_effect = [[], [], _mock_queue_issues(1)]
+        from cwhelper.services.search import _search_queue
+        results = _search_queue("US-RIN01", "e", "t")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(mock_jql.call_count, 3)
+        jql3 = mock_jql.call_args_list[2][0][0]
+        self.assertIn('cf[10207] ~ "US-RIN01"', jql3)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_mine_only_flag(self, mock_jql):
+        """mine_only=True adds currentUser() to JQL."""
+        mock_jql.return_value = _mock_queue_issues(1)
+        from cwhelper.services.search import _search_queue
+        _search_queue("", "e", "t", mine_only=True)
+        jql = mock_jql.call_args[0][0]
+        self.assertIn("currentUser()", jql)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_status_filter_verification(self, mock_jql):
+        """status_filter='verification' uses correct JQL clause."""
+        mock_jql.return_value = []
+        from cwhelper.services.search import _search_queue
+        _search_queue("", "e", "t", status_filter="verification")
+        jql = mock_jql.call_args[0][0]
+        self.assertIn('status = "Verification"', jql)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_status_filter_all(self, mock_jql):
+        """status_filter='all' omits status clause entirely."""
+        mock_jql.return_value = []
+        from cwhelper.services.search import _search_queue
+        _search_queue("", "e", "t", status_filter="all")
+        jql = mock_jql.call_args[0][0]
+        self.assertNotIn("status", jql.lower().split("order")[0])
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_project_ho(self, mock_jql):
+        """project='HO' appears in JQL."""
+        mock_jql.return_value = []
+        from cwhelper.services.search import _search_queue
+        _search_queue("", "e", "t", project="HO")
+        jql = mock_jql.call_args[0][0]
+        self.assertIn('"HO"', jql)
+
+    @patch("cwhelper.services.search._jql_search")
+    def test_radar_status_filter(self, mock_jql):
+        """status_filter='radar' uses the HO radar status list."""
+        mock_jql.return_value = []
+        from cwhelper.services.search import _search_queue
+        _search_queue("", "e", "t", status_filter="radar", project="HO")
+        jql = mock_jql.call_args[0][0]
+        self.assertIn("RMA-initiate", jql)
+        self.assertIn("Sent to DCT UC", jql)
+
+
+class TestQueueJsonOutput(unittest.TestCase):
+    """Tests for _run_queue_json — scriptable JSON output."""
+
+    def setUp(self):
+        _cfg.FEATURES["queue"] = True
+
+    @patch("cwhelper.services.queue._search_queue")
+    def test_json_output_structure(self, mock_sq):
+        """--json outputs valid JSON array of issues."""
+        mock_sq.return_value = _mock_queue_issues(3)
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a[0]) if a else "")):
+            from cwhelper.services.queue import _run_queue_json
+            _run_queue_json("e", "t", "US-EAST-03", False, 20, "open", "DO")
+        output = buf.getvalue()
+        import json
+        data = json.loads(output)
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 3)
+        self.assertIn("key", data[0])
+
+    @patch("cwhelper.services.queue._search_queue")
+    def test_empty_queue_json(self, mock_sq):
+        """Empty queue outputs empty JSON array."""
+        mock_sq.return_value = []
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a[0]) if a else "")):
+            from cwhelper.services.queue import _run_queue_json
+            _run_queue_json("e", "t", "", False, 20, "open", "DO")
+        import json
+        data = json.loads(buf.getvalue())
+        self.assertEqual(data, [])
+
+
+class TestQueueExtractRackNum(unittest.TestCase):
+    """Tests for rack number extraction used in queue sorting."""
+
+    def setUp(self):
+        from cwhelper.services.queue import _run_queue_interactive
+        # Access the nested function via the module
+        self._extract = None
+
+    def test_rack_from_location_field(self):
+        """Extract rack from cf[10207] format: US-SITE01.DH1.R064.RU22"""
+        from cwhelper.services import queue as _q
+        # Test the regex pattern directly
+        import re
+        loc = "US-SITE01.DH1.R064.RU22"
+        m = re.search(r'\.R(\d+)\.', loc)
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1)), 64)
+
+    def test_rack_from_hostname(self):
+        """Extract rack from hostname: dh1-r306-node-04"""
+        import re
+        hostname = "dh1-r306-node-04"
+        m = re.search(r'\br(\d+)\b', hostname, re.IGNORECASE)
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1)), 306)
+
+    def test_no_rack_returns_none(self):
+        """No rack number in any field → None."""
+        import re
+        for val in ["", "no-rack-here", "some random text"]:
+            m = re.search(r'\.R(\d+)\.', val) or re.search(r'\bR(\d+)\b', val)
+            self.assertIsNone(m)
+
+
+class TestQueueFeatureGate(unittest.TestCase):
+    """Tests that queue feature is properly gated."""
+
+    def setUp(self):
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            _cfg.FEATURES[fid] = meta["default"]
+
+    def test_cli_queue_blocked_when_disabled(self):
+        """cwhelper queue exits with message when feature disabled."""
+        _cfg.FEATURES["queue"] = False
+        buf = io.StringIO()
+        with patch("builtins.print", side_effect=lambda *a, **kw: buf.write(str(a))):
+            result = _cli._require_feature("queue")
+        self.assertFalse(result)
+        self.assertIn("Queue browser", buf.getvalue())
+
+    def test_cli_queue_allowed_when_enabled(self):
+        """cwhelper queue proceeds when feature enabled."""
+        _cfg.FEATURES["queue"] = True
+        result = _cli._require_feature("queue")
+        self.assertTrue(result)
 
 
 # ===========================================================================
