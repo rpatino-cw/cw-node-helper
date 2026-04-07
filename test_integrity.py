@@ -16,6 +16,8 @@ from unittest.mock import patch, MagicMock
 # ---------------------------------------------------------------------------
 os.environ.setdefault("JIRA_EMAIL", "test.user@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "fake-token")
+# Clear real site names so they don't leak into test output
+os.environ.pop("KNOWN_SITES", None)
 
 # Mock requests so the module-level `requests.Session()` doesn't do real HTTP
 _mock_requests = MagicMock()
@@ -1629,14 +1631,14 @@ class TestFeatureFlags(unittest.TestCase):
         _cfg.FEATURES["queue"] = True
         _cfg.FEATURES["learn"] = True
         keys = _cfg._enabled_menu_keys()
-        self.assertIn("2", keys)
+        self.assertIn("1", keys)  # queue is now menu key 1
         self.assertIn("L", keys)
 
     def test_menu_options_filtered(self):
         """Disabled features are excluded from menu options list."""
         options = [
-            ("2",  "Browse queue", "hint"),
-            ("3",  "My tickets",   "hint"),
+            ("1",  "Browse queue", "hint"),
+            ("2",  "My tickets",   "hint"),
             ("",   "",             ""),
             ("L",  "Learn",        "hint"),
         ]
@@ -1646,8 +1648,8 @@ class TestFeatureFlags(unittest.TestCase):
         emk = _cfg._enabled_menu_keys()
         filtered = [o for o in options if not o[0].strip() or o[0] in emk]
         keys = [o[0] for o in filtered if o[0].strip()]
-        self.assertIn("2", keys)
-        self.assertNotIn("3", keys)
+        self.assertIn("1", keys)
+        self.assertNotIn("2", keys)
         self.assertNotIn("L", keys)
         # Separator preserved
         self.assertIn(("", "", ""), filtered)

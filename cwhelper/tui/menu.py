@@ -249,15 +249,15 @@ def _interactive_menu():
             last_ticket_pair = (last_key, last_summary)
 
         # --- Build options list ---
-        opt4 = ("4", "Stop watching",  "watcher is running") if watcher_running \
-               else ("4", "Watch queue", "grab tickets live")
+        opt3 = ("3", "Stop watching",  "watcher is running") if watcher_running \
+               else ("3", "Watch queue", "grab tickets live")
 
         _all_options = [
-            ("2",  "Browse queue", "DO · HO · SDA"),
-            ("3",  "My tickets",   ""),
-            opt4,
-            ("5",  "Rack map",     ""),
-            ("6",  "Bookmarks",    ""),
+            ("1",  "Browse queue", "DO · HO · SDA"),
+            ("2",  "My tickets",   ""),
+            opt3,
+            ("4",  "Rack map",     ""),
+            ("5",  "Bookmarks",    ""),
             ("",   "",             ""),
             ("b",  "Shift brief",  "AI priority summary — what to work on first"),
             ("p",  "Start all",    "bulk In Progress (my tickets)"),
@@ -425,8 +425,8 @@ def _interactive_menu():
             state = _settings_page(state)
             continue
 
-        # --- 2: Browse queue (DO, HO, or SDA) --------------------------------
-        elif choice == "2" and _cfg._is_feature_enabled("queue"):
+        # --- 1: Browse queue (DO, HO, or SDA) --------------------------------
+        elif choice == "1" and _cfg._is_feature_enabled("queue"):
             print(f"\n  {DIM}Project:{RESET}")
             print(f"    {BOLD}1{RESET} DO  — Data Operations {DIM}(hands-on: reseat, swap, cable){RESET}")
             print(f"    {BOLD}2{RESET} HO  — Hardware Operations {DIM}(RMA lifecycle, vendor, parts){RESET}")
@@ -451,8 +451,8 @@ def _interactive_menu():
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return
 
-        # --- 3: My tickets — with stale sub-filter when stale tickets exist ---
-        elif choice == "3" and _cfg._is_feature_enabled("my_tickets"):
+        # --- 2: My tickets — with stale sub-filter when stale tickets exist ---
+        elif choice == "2" and _cfg._is_feature_enabled("my_tickets"):
             if _stale_count > 0:
                 plural = "s" if _stale_count != 1 else ""
                 print(f"\n  {DIM}My tickets:{RESET}")
@@ -477,8 +477,8 @@ def _interactive_menu():
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return
 
-        # --- 4: Watch queue (toggle background watcher) --------------------
-        elif choice == "4" and _cfg._is_feature_enabled("watcher"):
+        # --- 3: Watch queue (toggle background watcher) --------------------
+        elif choice == "3" and _cfg._is_feature_enabled("watcher"):
             if _is_watcher_running():
                 _stop_background_watcher()
                 print(f"\n  {DIM}Watcher stopped.{RESET}")
@@ -528,8 +528,8 @@ def _interactive_menu():
                 print(f"\n  {DIM}Watcher is already running.{RESET}")
                 _brief_pause()
 
-        # --- 5: Rack map -------------------------------------------------------
-        elif choice == "5" and _cfg._is_feature_enabled("rack_map"):
+        # --- 4: Rack map -------------------------------------------------------
+        elif choice == "4" and _cfg._is_feature_enabled("rack_map"):
             recent_racks = list(state.get("recent_racks", []))
 
             # Backfill from user's queue if fewer than 5
@@ -605,8 +605,8 @@ def _interactive_menu():
             else:
                 print(f"  {DIM}Could not parse rack location. Expected format: US-SITE01.DH1.R64.RU34{RESET}")
 
-        # --- 6: Bookmark manager ----------------------------------------------
-        elif choice == "6" and _cfg._is_feature_enabled("bookmarks"):
+        # --- 5: Bookmark manager ----------------------------------------------
+        elif choice == "5" and _cfg._is_feature_enabled("bookmarks"):
             state = _manage_bookmarks(state, email, token)
 
         # --- b: Shift brief — AI priority summary from live queue ------------

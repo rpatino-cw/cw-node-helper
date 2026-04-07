@@ -103,7 +103,7 @@ Major feature additions, UX improvements, and bug fixes across the tool. All cha
 
 ### Logged-In User Banner
 - Shows full name derived from `JIRA_EMAIL` in green bold
-- "logged in" confirmation instead of "Hey Romeo"
+- "logged in" confirmation instead of hardcoded greeting
 - Cleaner `━`/`┃` border style
 
 ### Assignee Condition

@@ -72,6 +72,11 @@ def main():
         _cli_setup()
         return
 
+    # "doctor" subcommand — health check
+    if raw_args[0] == "doctor":
+        _cli_doctor()
+        return
+
     # "config" subcommand — feature toggle management
     if raw_args[0] == "config":
         _cli_config(raw_args[1:])
@@ -153,6 +158,7 @@ def _print_cli_help():
 
   GETTING STARTED
     cwhelper setup                              # first-time credential wizard
+    cwhelper doctor                             # verify environment + connectivity
     cwhelper config --enable-all                # enable all features
     cwhelper                                    # launch interactive menu
 
@@ -245,6 +251,94 @@ def _print_cli_help():
     cwhelper verify DO-96947                    # auto-detect verification flow
     cwhelper ibtrace S8.3.2 22/1               # trace IB connection
 """)
+
+
+def _cli_doctor():
+    """Health check — verify environment, credentials, and API connectivity."""
+    import platform
+
+    print(f"\n  {BOLD}CW Node Helper — Doctor{RESET}\n")
+
+    checks = []
+
+    # Python version
+    py_ver = platform.python_version()
+    py_ok = tuple(int(x) for x in py_ver.split(".")[:2]) >= (3, 10)
+    checks.append(("Python", py_ver, py_ok, "3.10+ required" if not py_ok else ""))
+
+    # .env file
+    env_path = os.path.join(_cfg._PROJECT_ROOT, ".env")
+    env_exists = os.path.exists(env_path)
+    checks.append((".env file", env_path, env_exists, "Run: cwhelper setup" if not env_exists else ""))
+
+    # Jira credentials
+    jira_email = os.environ.get("JIRA_EMAIL", "").strip()
+    jira_token = os.environ.get("JIRA_API_TOKEN", "").strip()
+    jira_url = os.environ.get("JIRA_BASE_URL", _cfg.JIRA_BASE_URL)
+    has_jira_creds = bool(jira_email and jira_token)
+    checks.append(("Jira credentials", jira_email or "(not set)", has_jira_creds,
+                    "Set JIRA_EMAIL + JIRA_API_TOKEN" if not has_jira_creds else ""))
+
+    # Jira connectivity
+    jira_reachable = False
+    if has_jira_creds:
+        try:
+            jira_reachable = _jira_health_check(jira_email, jira_token)
+        except Exception:
+            pass
+    checks.append(("Jira API", jira_url, jira_reachable,
+                    "Check URL/token/network" if has_jira_creds and not jira_reachable else
+                    "Fix credentials first" if not has_jira_creds else ""))
+
+    # NetBox
+    nb_url = os.environ.get("NETBOX_API_URL", "").strip()
+    nb_token = os.environ.get("NETBOX_API_TOKEN", "").strip()
+    has_nb = bool(nb_url and nb_token)
+    nb_reachable = False
+    if has_nb:
+        try:
+            resp = _cfg._session.get(
+                f"{nb_url.rstrip('/')}/api/status/",
+                headers={"Authorization": f"Token {nb_token}", "Accept": "application/json"},
+                timeout=(3, 5),
+            )
+            nb_reachable = resp.status_code < 400
+        except Exception:
+            pass
+    checks.append(("NetBox API", nb_url or "(not configured)", nb_reachable if has_nb else None,
+                    "" if not has_nb else "Check URL/token" if not nb_reachable else ""))
+
+    # KNOWN_SITES
+    sites = _cfg.KNOWN_SITES
+    checks.append(("Known sites", f"{len(sites)} configured" if sites else "(none)",
+                    bool(sites) or None, "Optional: set KNOWN_SITES in .env"))
+
+    # Features
+    n_on = sum(1 for v in _cfg.FEATURES.values() if v)
+    n_total = len(_cfg.FEATURES)
+    checks.append(("Features", f"{n_on}/{n_total} enabled", n_on > 0, "Run: cwhelper config --enable-all"))
+
+    # Print results
+    for label, detail, status, fix in checks:
+        if status is True:
+            icon = f"{GREEN}{BOLD}✓{RESET}"
+        elif status is False:
+            icon = f"{RED}{BOLD}✗{RESET}"
+        else:
+            icon = f"{YELLOW}−{RESET}"  # optional/skipped
+        print(f"  {icon}  {BOLD}{label:<20}{RESET} {DIM}{detail}{RESET}")
+        if fix and status is False:
+            print(f"     {YELLOW}→ {fix}{RESET}")
+
+    print()
+
+    # Summary
+    fails = sum(1 for _, _, s, _ in checks if s is False)
+    if fails == 0:
+        print(f"  {GREEN}{BOLD}All checks passed!{RESET}")
+    else:
+        print(f"  {YELLOW}{fails} issue{'s' if fails != 1 else ''} found.{RESET}")
+    print()
 
 
 def _cli_config(args_list: list):
@@ -404,6 +498,47 @@ def _cli_setup():
         _cfg.JIRA_BASE_URL = jira_url
         if _jira_health_check(jira_email, jira_token):
             print(f"\r  {GREEN}{BOLD}Jira OK{RESET}                         ")
+
+            # Auto-discover KNOWN_SITES if not already set
+            if not values.get("KNOWN_SITES"):
+                print(f"  {DIM}Discovering sites from recent tickets...{RESET}", end="", flush=True)
+                try:
+                    from cwhelper.clients.jira import _jira_post
+                    resp = _jira_post("/rest/api/3/search/jql", jira_email, jira_token, body={
+                        "jql": 'project in ("DO","HO") AND cf[10194] is not EMPTY ORDER BY updated DESC',
+                        "maxResults": 50,
+                        "fields": ["customfield_10194"],
+                    })
+                    if resp and resp.ok:
+                        sites = set()
+                        for iss in resp.json().get("issues", []):
+                            site_val = iss.get("fields", {}).get("customfield_10194")
+                            if isinstance(site_val, dict):
+                                site_val = site_val.get("value", "")
+                            if isinstance(site_val, str) and site_val.strip():
+                                sites.add(site_val.strip())
+                        if sites:
+                            sorted_sites = sorted(sites)
+                            values["KNOWN_SITES"] = ",".join(sorted_sites)
+                            # Re-write .env with discovered sites
+                            lines = ["# CW Node Helper credentials", "# Generated by: cwhelper setup", "#"]
+                            for key, _, _, _ in fields:
+                                val = values.get(key, "")
+                                if val:
+                                    lines.append(f'{key}="{val}"')
+                            lines.append("")
+                            with open(env_path, "w") as f:
+                                f.write("\n".join(lines))
+                            os.environ["KNOWN_SITES"] = values["KNOWN_SITES"]
+                            print(f"\r  {GREEN}{BOLD}{len(sorted_sites)} sites found{RESET} — saved to .env       ")
+                            for s in sorted_sites[:8]:
+                                print(f"    {DIM}{s}{RESET}")
+                            if len(sorted_sites) > 8:
+                                print(f"    {DIM}...and {len(sorted_sites) - 8} more{RESET}")
+                        else:
+                            print(f"\r  {DIM}No sites found in recent tickets{RESET}              ")
+                except Exception:
+                    print(f"\r  {DIM}Could not auto-discover sites{RESET}              ")
         else:
             print(f"\r  {YELLOW}Jira unreachable{RESET} — check URL/token/network")
     else:
