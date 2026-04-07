@@ -58,7 +58,13 @@ def main():
 
     # No arguments at all → launch interactive menu
     if not raw_args:
-        _preflight_check()
+        # Check if credentials exist before preflight (avoid double-prompting)
+        if os.environ.get("JIRA_EMAIL") and os.environ.get("JIRA_API_TOKEN"):
+            _preflight_check()
+        elif not os.path.exists(os.path.join(_cfg._PROJECT_ROOT, ".env")):
+            print(f"\n  {BOLD}Welcome to CW Node Helper!{RESET}")
+            print(f"  {DIM}No .env file found. Let's set up your credentials.{RESET}\n")
+            _cli_setup()
         _interactive_menu()
         return
 
@@ -70,6 +76,11 @@ def main():
     # "setup" subcommand — interactive credential wizard
     if raw_args[0] == "setup":
         _cli_setup()
+        return
+
+    # "update" subcommand — pull latest + reinstall
+    if raw_args[0] == "update":
+        _cli_update()
         return
 
     # "doctor" subcommand — health check
@@ -160,6 +171,7 @@ def _print_cli_help():
     cwhelper setup                              # first-time credential wizard
     cwhelper doctor                             # verify environment + connectivity
     cwhelper config --enable-all                # enable all features
+    cwhelper update                             # pull latest + reinstall
     cwhelper                                    # launch interactive menu
 
   USAGE
@@ -251,6 +263,54 @@ def _print_cli_help():
     cwhelper verify DO-96947                    # auto-detect verification flow
     cwhelper ibtrace S8.3.2 22/1               # trace IB connection
 """)
+
+
+def _cli_update():
+    """Pull latest code and reinstall."""
+    import subprocess
+    print(f"\n  {BOLD}CW Node Helper — Update{RESET}\n")
+
+    # git pull
+    print(f"  {DIM}Pulling latest...{RESET}", end="", flush=True)
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=_cfg._PROJECT_ROOT,
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            if "Already up to date" in result.stdout:
+                print(f"\r  {GREEN}{BOLD}Already up to date{RESET}              ")
+            else:
+                print(f"\r  {GREEN}{BOLD}Updated{RESET}                         ")
+                # Show what changed
+                for line in result.stdout.strip().split("\n")[-5:]:
+                    if line.strip():
+                        print(f"    {DIM}{line.strip()}{RESET}")
+        else:
+            print(f"\r  {YELLOW}Pull failed{RESET} — {result.stderr.strip()[:60]}")
+            print(f"  {DIM}Try manually: cd {_cfg._PROJECT_ROOT} && git pull{RESET}")
+            return
+    except Exception as e:
+        print(f"\r  {YELLOW}Pull failed{RESET} — {e}")
+        return
+
+    # pip install
+    print(f"  {DIM}Reinstalling...{RESET}", end="", flush=True)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
+            cwd=_cfg._PROJECT_ROOT,
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            print(f"\r  {GREEN}{BOLD}Reinstalled{RESET}                     ")
+        else:
+            print(f"\r  {YELLOW}pip install failed{RESET}")
+    except Exception as e:
+        print(f"\r  {YELLOW}Reinstall failed{RESET} — {e}")
+
+    print(f"\n  {DIM}Done! Restart cwhelper to use the latest version.{RESET}\n")
 
 
 def _cli_doctor():
@@ -564,10 +624,28 @@ def _cli_setup():
         except Exception:
             print(f"\r  {YELLOW}NetBox unreachable{RESET} — check URL/network")
 
-    print(f"\n  {DIM}Next steps:{RESET}")
+    # Offer to enable all features
+    n_on = sum(1 for v in _cfg.FEATURES.values() if v)
+    n_total = len(_cfg.FEATURES)
+    if n_on < n_total:
+        try:
+            enable = input(f"\n  Enable all {n_total} features? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            enable = "n"
+        if enable in ("", "y", "yes"):
+            for fid in _cfg.FEATURES:
+                _cfg.FEATURES[fid] = True
+            state = _load_user_state()
+            _cfg._save_features(state)
+            _save_user_state(state)
+            print(f"  {GREEN}{BOLD}All features enabled!{RESET}")
+        else:
+            print(f"  {DIM}Kept {n_on}/{n_total} features. Change later: cwhelper config{RESET}")
+
+    print(f"\n  {DIM}You're all set! Run:{RESET}")
     print(f"    {BOLD}cwhelper{RESET}                        Launch interactive menu")
     print(f"    {BOLD}cwhelper DO-12345{RESET}               Look up a ticket")
-    print(f"    {BOLD}cwhelper config --enable-all{RESET}    Enable all features\n")
+    print(f"    {BOLD}cwhelper doctor{RESET}                 Verify everything works\n")
 
 
 def _cli_queue(args_list: list):
