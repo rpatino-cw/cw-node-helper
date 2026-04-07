@@ -222,6 +222,230 @@ class TestActionPanelButtons(unittest.TestCase):
         out_nb = _capture_panel(_base_ticket_ctx(source="netbox", sla={"ongoing": True}))
         self._lacks(out_nb, "u")
 
+    # --- Feature flag gating on action panel ---
+
+    def test_rack_map_hidden_when_feature_disabled(self):
+        _cfg.FEATURES["rack_map"] = False
+        out = _capture_panel(_base_ticket_ctx(rack_location="US-SITE01.DH1.R64.RU34"))
+        self._lacks(out, "r")
+
+    def test_rack_map_shown_when_feature_enabled(self):
+        _cfg.FEATURES["rack_map"] = True
+        out = _capture_panel(_base_ticket_ctx(rack_location="US-SITE01.DH1.R64.RU34"))
+        self._has(out, "r")
+
+    def test_verify_hidden_when_feature_disabled(self):
+        _cfg.FEATURES["verify"] = False
+        out = _capture_panel(_base_ticket_ctx(service_tag="10NQ724"))
+        self._lacks(out, "vr")
+
+    def test_verify_shown_when_feature_enabled(self):
+        _cfg.FEATURES["verify"] = True
+        out = _capture_panel(_base_ticket_ctx(service_tag="10NQ724"))
+        self._has(out, "vr")
+
+    def test_cab_ops_hidden_when_bulk_start_disabled(self):
+        _cfg.FEATURES["bulk_start"] = False
+        ctx = _base_ticket_ctx(
+            status="In Progress", assignee="Me", _assignee_account_id="aid1",
+            rack_location="US-SITE01.DH1.R64.RU34",
+        )
+        out = _capture_panel(ctx, display_name="Me", account_id="aid1")
+        self._lacks(out, "hc", "hg", "lg", "ws")
+
+    def test_cab_ops_shown_when_bulk_start_enabled(self):
+        _cfg.FEATURES["bulk_start"] = True
+        ctx = _base_ticket_ctx(
+            status="In Progress", assignee="Me", _assignee_account_id="aid1",
+            rack_location="US-SITE01.DH1.R64.RU34",
+        )
+        out = _capture_panel(ctx, display_name="Me", account_id="aid1")
+        self._has(out, "hc", "hg", "lg", "ws")
+
+    # --- VIEW section: every button ---
+
+    def test_connections_needs_netbox_interfaces(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "n")
+        out_yes = _capture_panel(_base_ticket_ctx(netbox={"interfaces": [{"name": "eth0"}]}))
+        self._has(out_yes, "n")
+
+    def test_comments_always_shown(self):
+        """[c] Comments is always visible regardless of context."""
+        out = _capture_panel(_base_ticket_ctx())
+        self._has(out, "c")
+
+    def test_comments_shows_count(self):
+        out = _capture_panel(_base_ticket_ctx(comments=[{"author": "A", "body": "x", "created": "2024-01-01"}] * 3))
+        self.assertIn("Comments (3)", _strip_ansi(out))
+
+    def test_description_needs_description_text(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "w")
+        out_yes = _capture_panel(_base_ticket_ctx(description_text="Some text"))
+        self._has(out_yes, "w")
+
+    def test_diags_needs_diag_links(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "d")
+        out_yes = _capture_panel(_base_ticket_ctx(diag_links=[{"url": "https://diag.example.com"}]))
+        self._has(out_yes, "d")
+
+    def test_img_always_shown(self):
+        """[img] Attach Screenshot is always visible."""
+        out = _capture_panel(_base_ticket_ctx())
+        self._has(out, "img")
+
+    # --- OPEN section: every button ---
+
+    def test_jira_shown_for_tickets(self):
+        out = _capture_panel(_base_ticket_ctx())
+        self._has(out, "j")
+
+    def test_jira_hidden_for_netbox_source(self):
+        out = _capture_panel(_base_ticket_ctx(source="netbox"))
+        self._lacks(out, "j")
+
+    def test_grafana_needs_node_details_url(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "g")
+        out_yes = _capture_panel(_base_ticket_ctx(grafana={"node_details": "https://grafana/d/1"}))
+        self._has(out_yes, "g")
+
+    def test_netbox_needs_device_id(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "x")
+        out_yes = _capture_panel(_base_ticket_ctx(netbox={"device_id": 42}))
+        self._has(out_yes, "x")
+
+    def test_snipeit_needs_snipe_url(self):
+        out_no = _capture_panel(_base_ticket_ctx(netbox={"device_id": 42}))
+        self._lacks(out_no, "si")
+        out_yes = _capture_panel(_base_ticket_ctx(netbox={"snipe_url": "https://snipe.example.com/1"}))
+        self._has(out_yes, "si")
+
+    def test_bmc_needs_device_name_and_site_slug(self):
+        out_no = _capture_panel(_base_ticket_ctx(netbox={"device_id": 42}))
+        self._lacks(out_no, "t")
+        out_yes = _capture_panel(_base_ticket_ctx(netbox={"device_name": "node-01", "site_slug": "us-site"}))
+        self._has(out_yes, "t")
+
+    def test_fleet_diags_needs_service_tag(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "fd")
+        out_yes = _capture_panel(_base_ticket_ctx(service_tag="SVC001"))
+        self._has(out_yes, "fd")
+
+    # --- MORE section: every button ---
+
+    def test_attachments_needs_attachment_list(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "at")
+        out_yes = _capture_panel(_base_ticket_ctx(attachments=[{"filename": "log.txt"}]))
+        self._has(out_yes, "at")
+        self.assertIn("Attachments (1)", _strip_ansi(out_yes))
+
+    def test_linked_needs_linked_issues(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "l")
+        out_yes = _capture_panel(_base_ticket_ctx(linked_issues=[{"key": "HO-111"}]))
+        self._has(out_yes, "l")
+
+    def test_rack_view_needs_rack_data(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "e")
+        out_yes = _capture_panel(_base_ticket_ctx(rack_location="US-SITE01.DH1.R64.RU34"))
+        self._has(out_yes, "e")
+        out_nb = _capture_panel(_base_ticket_ctx(netbox={"rack_id": 42}))
+        self._has(out_nb, "e")
+
+    def test_portal_needs_portal_url(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "p")
+        out_yes = _capture_panel(_base_ticket_ctx(_portal_url="https://portal.example.com"))
+        self._has(out_yes, "p")
+
+    def test_ib_needs_grafana_ib_search(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "i")
+        out_yes = _capture_panel(_base_ticket_ctx(grafana={"ib_node_search": "https://grafana/ib"}))
+        self._has(out_yes, "i")
+
+    def test_ho_context_shows_view_ho(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "o")
+        out_yes = _capture_panel(_base_ticket_ctx(ho_context={"key": "HO-555"}))
+        self._has(out_yes, "o")
+        self.assertIn("View HO-555", _strip_ansi(out_yes))
+
+    def test_psu_dashboard_needs_psu_info(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "pg")
+        out_yes = _capture_panel(_base_ticket_ctx(psu_info={"psu_id": "3"}))
+        self._has(out_yes, "pg")
+
+    def test_bookmark_toggle(self):
+        """[*] shows 'Bookmark' when not bookmarked, 'Remove Bookmark' when bookmarked."""
+        out_fresh = _capture_panel(_base_ticket_ctx())
+        self.assertIn("Bookmark", _strip_ansi(out_fresh))
+        # Bookmarked state
+        state = {"bookmarks": [{"type": "ticket", "params": {"key": "DO-99999"}}]}
+        out_bm = _capture_panel(_base_ticket_ctx(), bookmarks=state.get("bookmarks"))
+        self.assertIn("Remove Bookmark", _strip_ansi(out_bm))
+
+    # --- NAV section: every button ---
+
+    def test_nav_back_menu_quit_always_shown(self):
+        out = _capture_panel(_base_ticket_ctx())
+        self._has(out, "b", "m", "q")
+
+    def test_nav_history_needs_node_id(self):
+        out_no = _capture_panel(_base_ticket_ctx())
+        self._lacks(out_no, "hn")
+        out_yes = _capture_panel(_base_ticket_ctx(service_tag="SVC001"))
+        self._has(out_yes, "hn")
+
+    def test_nav_refresh_only_for_tickets(self):
+        out_ticket = _capture_panel(_base_ticket_ctx())
+        self._has(out_ticket, "=")
+        out_nb = _capture_panel(_base_ticket_ctx(source="netbox"))
+        self._lacks(out_nb, "=")
+
+    # --- Status transitions: comprehensive ---
+
+    def test_closed_mine_shows_back_to_verification(self):
+        out = _capture_panel(
+            _base_ticket_ctx(status="Closed", assignee="Me", _assignee_account_id="aid1"),
+            display_name="Me", account_id="aid1",
+        )
+        self._has(out, "vv")
+
+    def test_reopened_shows_start(self):
+        out = _capture_panel(_base_ticket_ctx(status="Reopened", assignee=None))
+        self._has(out, "s")
+
+    def test_awaiting_triage_shows_start(self):
+        out = _capture_panel(_base_ticket_ctx(status="Awaiting Triage", assignee=None))
+        self._has(out, "s")
+
+    def test_waiting_for_support_mine_shows_resume(self):
+        out = _capture_panel(
+            _base_ticket_ctx(status="Waiting For Support", assignee="Me", _assignee_account_id="aid1"),
+            display_name="Me", account_id="aid1",
+        )
+        self._has(out, "z")
+
+    def test_hand_off_shown_when_mine(self):
+        out = _capture_panel(
+            _base_ticket_ctx(assignee="Me"),
+            display_name="Me",
+        )
+        self._has(out, "h")
+
+    def test_hand_off_hidden_when_not_mine(self):
+        out = _capture_panel(_base_ticket_ctx(assignee="Someone"))
+        self._lacks(out, "h")
+
 
 # ===========================================================================
 # 2. Transition Routing Logic
