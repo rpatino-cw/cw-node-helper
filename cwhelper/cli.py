@@ -72,17 +72,6 @@ def main():
         _print_cli_help()
         return
 
-    # "tui" subcommand — Textual dashboard
-    if raw_args[0] == "tui":
-        try:
-            from cwhelper.tui_app import CWHelperApp
-            app = CWHelperApp()
-            app.run()
-        except ImportError:
-            print(f"\n  {YELLOW}Textual not installed.{RESET}")
-            print(f"  Install with: pip install cw-node-helper[tui]\n")
-        return
-
     # "setup" subcommand — interactive credential wizard
     if raw_args[0] == "setup":
         _cli_setup()
