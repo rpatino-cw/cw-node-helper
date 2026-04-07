@@ -78,6 +78,16 @@ def _base_ticket_ctx(**overrides) -> dict:
 class TestActionPanelButtons(unittest.TestCase):
     """Verify _print_action_panel shows the right buttons per context."""
 
+    def setUp(self):
+        # Enable all features so button visibility tests work as expected
+        for fid in _cfg.FEATURES:
+            _cfg.FEATURES[fid] = True
+
+    def tearDown(self):
+        # Reset to defaults
+        for fid, meta in _cfg._FEATURE_REGISTRY.items():
+            _cfg.FEATURES[fid] = meta["default"]
+
     def _has(self, output, *keys):
         plain = _strip_ansi(output)
         for k in keys:

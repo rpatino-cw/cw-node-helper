@@ -213,7 +213,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
         if status_lower == "in progress" and mine:
             status_items.append(btn("v", "Verification", BLUE))
             status_items.append(btn("y", "On Hold", YELLOW))
-            if ctx.get("rack_location"):
+            if ctx.get("rack_location") and _cfg._is_feature_enabled("bulk_start"):
                 status_items.append(btn("hc", "Hold cab", YELLOW))
         if status_lower in ("on hold", "blocked", "paused",
                             "waiting for support", "awaiting support") and mine:
@@ -224,8 +224,8 @@ def _print_action_panel(ctx: dict, state: dict = None):
         if status_lower in ("closed", "done", "resolved") and mine:
             status_items.append(btn("vv", "Back to Verification", BLUE))
 
-        # Cab-level bulk actions — always available when there's a rack location
-        if ctx.get("rack_location"):
+        # Cab-level bulk actions — gated by bulk_start feature flag
+        if ctx.get("rack_location") and _cfg._is_feature_enabled("bulk_start"):
             status_items.append(btn("hg", "Give cab", CYAN))
             status_items.append(btn("lg", "Link cab", MAGENTA))
             status_items.append(btn("ws", "Grab waiting cab", GREEN))
@@ -237,7 +237,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
 
     # ── VIEW (inline data views — always shown) ──
     view_items = []
-    if ctx.get("rack_location"):
+    if ctx.get("rack_location") and _cfg._is_feature_enabled("rack_map"):
         view_items.append(btn("r", "Rack Map", CYAN))
     if netbox and netbox.get("interfaces"):
         view_items.append(btn("n", "Connections", MAGENTA))
@@ -254,7 +254,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
         bl_label = "Close Blockers" if ctx.get("_show_blockers") else "Blockers"
         view_items.append(btn("bl", bl_label, RED))
     view_items.append(btn("img", "Attach Screenshot", MAGENTA))
-    if has_node_id:
+    if has_node_id and _cfg._is_feature_enabled("verify"):
         view_items.append(btn("vr", "Verify", GREEN))
     if view_items:
         print(f"  {BOLD}{WHITE}View{RESET}")
