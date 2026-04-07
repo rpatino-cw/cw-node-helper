@@ -24,7 +24,7 @@
 > **One command. Zero config files to edit manually.**
 
 ```bash
-curl -sL https://raw.githubusercontent.com/rpatino-cw/cw-node-helper/rpatino/cw-node-helper/install.sh | bash
+curl -sL https://raw.githubusercontent.com/rpatino-cw/cw-node-helper/main/install.sh | bash
 ```
 
 This clones the repo, installs dependencies, runs the setup wizard, discovers your sites from Jira, and enables all features. You'll be looking up tickets in under 60 seconds.

@@ -51,7 +51,7 @@ if [ -d "$INSTALL_DIR" ]; then
     git pull --ff-only 2>/dev/null || echo "  (could not auto-update — continuing with existing)"
 else
     echo "  Cloning repository..."
-    git clone -b rpatino/cw-node-helper "$REPO" "$INSTALL_DIR"
+    git clone "$REPO" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
