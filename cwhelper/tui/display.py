@@ -946,87 +946,47 @@ def _print_help():
     """Display a full help guide explaining every menu option and hotkey."""
     print(f"""
   {BOLD}{CYAN}{'━' * 54}{RESET}
-  {BOLD}{WHITE}  Quick Guide — DCT Node Helper{RESET}
+  {BOLD}{WHITE}  Quick Guide — CW Node Helper  {RESET}{DIM}v{APP_VERSION}{RESET}
   {BOLD}{CYAN}{'━' * 54}{RESET}
 
-  {BOLD}{WHITE}WHAT'S NEW  {RESET}{DIM}v{APP_VERSION}{RESET}
+  {BOLD}{WHITE}GETTING STARTED{RESET}
   {DIM}{'─' * 54}{RESET}
-
-  {BOLD}{YELLOW}v6.3.0{RESET}
-    {GREEN}+{RESET} {WHITE}Ticket categorizer{RESET}
-      {DIM}Scans last 50 queue tickets and groups them by
-      type (DEVICE, NETWORK, POWER_CYCLE, PSU_RESEAT,
-      LOW_LIGHT, PORT_FLAPPING, OTHER) with boolean
-      matching on summary keywords and diag links.
-      Includes troubleshooting tips per category.{RESET}
-
-  {BOLD}{YELLOW}v6.2.0{RESET}
-    {GREEN}+{RESET} {WHITE}SDA queue support{RESET}
-      {DIM}Browse SDA project tickets with Triage and
-      Customer Verification status filters.{RESET}
-    {GREEN}+{RESET} {WHITE}Beginner setup guide{RESET}
-      {DIM}Step-by-step install guide at site/setup-guide.html
-      and live on CodePen.{RESET}
-    {GREEN}+{RESET} {WHITE}start.sh launcher{RESET}
-      {DIM}One-click launcher script for non-tech users.{RESET}
-
-  {BOLD}{YELLOW}v6.1.0{RESET}
-    {GREEN}+{RESET} {WHITE}Rack map visualization{RESET}
-      {DIM}ASCII data hall maps with animated walking routes.{RESET}
-    {GREEN}+{RESET} {WHITE}MRB / Parts search [f]{RESET}
-      {DIM}Find RMA and parts tickets from ticket detail view.{RESET}
-    {GREEN}+{RESET} {WHITE}Bookmark shortcuts [a-e]{RESET}
-      {DIM}Save tickets and queue searches to main menu.{RESET}
+    cwhelper setup                  {DIM}Set up credentials{RESET}
+    cwhelper config --enable-all    {DIM}Enable all features{RESET}
+    cwhelper                        {DIM}Launch interactive menu{RESET}
 
   {BOLD}{WHITE}MAIN MENU{RESET}
   {DIM}{'─' * 54}{RESET}
+  {DIM}Only enabled features appear. Press {RESET}{BOLD}s{RESET}{DIM} for settings.{RESET}
 
-  {BOLD}1{RESET}  {WHITE}Lookup ticket{RESET}
-     {DIM}Enter a Jira key like DO-12345 or HO-67890.
-     Pulls up full ticket detail with node info, NetBox
-     data, and all available actions.
-     Use when: you have a ticket number and need context.{RESET}
+  {BOLD}1{RESET}  {WHITE}Lookup{RESET}
+     {DIM}Enter a Jira key (DO-12345), service tag, or hostname.
+     Shows ticket detail with node info, NetBox data, and actions.{RESET}
 
-  {BOLD}2{RESET}  {WHITE}Node info{RESET}
-     {DIM}Enter a service tag (e.g. S948338X5A04781) or
-     hostname. Finds ALL tickets for that node across
-     DO and HO projects.
-     Use when: you're at a rack and need the node's
-     full ticket history.{RESET}
+  {BOLD}2{RESET}  {WHITE}Browse queue{RESET}
+     {DIM}Browse DO, HO, or SDA tickets filtered by site and status.{RESET}
 
-  {BOLD}3{RESET}  {WHITE}Browse queue{RESET}
-     {DIM}Pick DO (Data Operations) or HO (Hardware Operations),
-     then filter by site and status.
-     HO includes a "Radar" filter showing tickets likely
-     to spawn DOs (RMA-initiate, Sent to DCT, etc.).
-     Use when: starting your shift and need to see
-     what's in the queue.{RESET}
+  {BOLD}3{RESET}  {WHITE}My tickets{RESET}
+     {DIM}Tickets assigned to you. Flags stale verifications >48h.{RESET}
 
-  {BOLD}4{RESET}  {WHITE}My tickets{RESET}
-     {DIM}Shows only tickets assigned to you.
-     Use when: checking your personal workload.{RESET}
+  {BOLD}4{RESET}  {WHITE}Watch queue{RESET}
+     {DIM}Background poller — alerts when new tickets appear.{RESET}
 
-  {BOLD}5{RESET}  {WHITE}Watch queue{RESET}
-     {DIM}Polls for new tickets every N seconds and sends
-     macOS notifications when new ones appear.
-     Use when: you want to be alerted about new tickets
-     without refreshing manually.{RESET}
+  {BOLD}5{RESET}  {WHITE}Rack map{RESET}
+     {DIM}ASCII data hall map with walking route to your rack.{RESET}
 
-  {BOLD}6{RESET}  {WHITE}Rack map{RESET}
-     {DIM}Shows a visual data hall map with your rack
-     highlighted and a yellow walking route from the
-     entrance. Animated in terminal.
-     Use when: you need to physically find a rack on
-     the floor.{RESET}
+  {BOLD}6{RESET}  {WHITE}Bookmarks{RESET}
+     {DIM}Save tickets or queue searches as main menu shortcuts.{RESET}
 
-  {BOLD}7{RESET}  {WHITE}Bookmarks{RESET}
-     {DIM}Save frequently used tickets or searches as
-     shortcuts (a-e) on the main menu.
-     Use when: you have tickets you check repeatedly.{RESET}
+  {BOLD}b{RESET}  {WHITE}Shift brief{RESET}
+     {DIM}AI-generated priority summary of what to work on first.{RESET}
+
+  {BOLD}s{RESET}  {WHITE}Settings{RESET}
+     {DIM}Toggle features on/off. Also: cwhelper config{RESET}
 
   {BOLD}{WHITE}TICKET VIEW HOTKEYS{RESET}
   {DIM}{'─' * 54}{RESET}
-  {DIM}These appear after viewing a ticket detail:{RESET}
+  {DIM}These appear after opening a ticket:{RESET}
 
   {BOLD}{WHITE}View{RESET}
     {CYAN}[r]{RESET} {WHITE}Rack Map{RESET}       {DIM}Data hall map with walking route{RESET}
@@ -1034,34 +994,24 @@ def _print_help():
     {YELLOW}[l]{RESET} {WHITE}Linked{RESET}        {DIM}Related DO/HO tickets{RESET}
     {BLUE}[d]{RESET} {WHITE}Diags{RESET}         {DIM}Diagnostic links from description{RESET}
     {GREEN}[c]{RESET} {WHITE}Comments{RESET}      {DIM}Latest Jira comments{RESET}
-    {YELLOW}[e]{RESET} {WHITE}Rack View{RESET}     {DIM}Visual rack elevation + pick a neighbor
-                      to search Jira. Type 'x' for NetBox.{RESET}
-    {YELLOW}[f]{RESET} {WHITE}MRB / Parts{RESET}   {DIM}Find RMA/parts tickets for this node
-                      in the MRB project (optics, PSUs, etc.){RESET}
+    {YELLOW}[e]{RESET} {WHITE}Rack View{RESET}     {DIM}Visual rack elevation with neighbors{RESET}
+    {YELLOW}[f]{RESET} {WHITE}MRB / Parts{RESET}   {DIM}Find RMA/parts tickets for this node{RESET}
 
   {BOLD}{WHITE}Status transitions{RESET}  {DIM}(shown based on current status){RESET}
-    {GREEN}[s]{RESET} {WHITE}Start Work{RESET}    {DIM}Grab & begin (New/To Do → In Progress){RESET}
-    {BLUE}[v]{RESET} {WHITE}Verification{RESET}  {DIM}Move to verification (optional comment){RESET}
-    {YELLOW}[y]{RESET} {WHITE}On Hold{RESET}       {DIM}Pause work (reason required){RESET}
+    {GREEN}[s]{RESET} {WHITE}Start Work{RESET}    {DIM}Grab & begin → In Progress{RESET}
+    {BLUE}[v]{RESET} {WHITE}Verification{RESET}  {DIM}Move to verification{RESET}
+    {YELLOW}[y]{RESET} {WHITE}On Hold{RESET}       {DIM}Pause work{RESET}
     {CYAN}[z]{RESET} {WHITE}Resume{RESET}        {DIM}Back to In Progress{RESET}
-    {RED}[k]{RESET} {WHITE}Close{RESET}         {DIM}Close ticket (comment + confirm required){RESET}
+    {RED}[k]{RESET} {WHITE}Close{RESET}         {DIM}Close ticket{RESET}
 
   {BOLD}{WHITE}Open in browser{RESET}
-    {CYAN}[j]{RESET} {WHITE}Jira{RESET}          {DIM}Open ticket in Jira{RESET}
-    {CYAN}[p]{RESET} {WHITE}Portal{RESET}        {DIM}Open Service Desk portal{RESET}
-    {YELLOW}[x]{RESET} {WHITE}NetBox{RESET}        {DIM}Open device in NetBox{RESET}
-    {GREEN}[g]{RESET} {WHITE}Grafana{RESET}       {DIM}Open node dashboard{RESET}
-    {GREEN}[i]{RESET} {WHITE}IB{RESET}            {DIM}InfiniBand search{RESET}
+    {CYAN}[j]{RESET} {WHITE}Jira{RESET}          {CYAN}[x]{RESET} {WHITE}NetBox{RESET}
+    {GREEN}[g]{RESET} {WHITE}Grafana{RESET}       {GREEN}[i]{RESET} {WHITE}IB search{RESET}
 
   {BOLD}{WHITE}Navigation{RESET}
-    {DIM}[b]{RESET} {WHITE}Back{RESET}          {DIM}Return to queue list{RESET}
-    {DIM}[m]{RESET} {WHITE}Menu{RESET}          {DIM}Return to main menu{RESET}
-    {DIM}[h]{RESET} {WHITE}History{RESET}       {DIM}All tickets for this node{RESET}
-    {DIM}[q]{RESET} {WHITE}Quit{RESET}          {DIM}Exit the tool{RESET}
+    {DIM}[b]{RESET} Back   {DIM}[m]{RESET} Menu   {DIM}[h]{RESET} History   {DIM}[q]{RESET} Quit
 
   {BOLD}{CYAN}{'━' * 54}{RESET}
-
-  {DIM}Scroll up to see the full guide.{RESET}
   {DIM}Press {RESET}{CYAN}{BOLD}w{RESET}{DIM} to open the visual docs in your browser.{RESET}
 """)
     try:
