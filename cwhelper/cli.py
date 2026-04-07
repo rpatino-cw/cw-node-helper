@@ -21,7 +21,6 @@ from cwhelper.services.brief import run_shift_brief
 from cwhelper.tui.menu import _interactive_menu
 from cwhelper.tui.display import _print_pretty, _print_json, _print_raw
 from cwhelper.services.verify import run_verify
-from cwhelper.services.learn import _run_learn_mode
 
 
 
@@ -142,13 +141,6 @@ def main():
         _cli_rack_report(raw_args[1:])
         return
 
-    # "learn" subcommand — code quiz game
-    if raw_args[0] == "learn":
-        if not _require_feature("learn"):
-            return
-        _run_learn_mode()
-        return
-
     # "ibtrace" subcommand — IB connection trace/lookup
     if raw_args[0] == "ibtrace":
         if not _require_feature("ibtrace"):
@@ -182,7 +174,6 @@ def _print_cli_help():
     cwhelper history <identifier>               # node ticket history
     cwhelper watch --site <SITE>                # live queue watcher
     cwhelper weekend-assign --site <SITE> --group <GROUP>
-    cwhelper learn                              # code quiz game
     cwhelper rack-report --site <SITE>          # tickets per rack
     cwhelper verify <identifier> [--type TYPE]  # verification flows
     cwhelper ibtrace <switch> [port]            # IB connection trace

@@ -1565,7 +1565,7 @@ class TestFeatureFlags(unittest.TestCase):
         expected = {
             "ticket_lookup", "queue", "my_tickets", "node_history",
             "shift_brief", "verify", "watcher", "rack_report",
-            "ibtrace", "learn", "rack_map", "bookmarks",
+            "ibtrace", "rack_map", "bookmarks",
             "bulk_start", "activity", "walkthrough", "weekend_assign",
             "ai_chat",
         }
@@ -1578,8 +1578,8 @@ class TestFeatureFlags(unittest.TestCase):
                             f"{fid} missing keys: {required - meta.keys()}")
 
     def test_default_enabled_features(self):
-        """Only ticket_lookup and queue are enabled by default."""
-        expected_on = {"ticket_lookup", "queue"}
+        """Core features enabled by default."""
+        expected_on = {"ticket_lookup", "queue", "my_tickets", "node_history", "activity"}
         for fid, meta in _cfg._FEATURE_REGISTRY.items():
             if fid in expected_on:
                 self.assertTrue(meta["default"], f"{fid} should default to True")
@@ -1587,10 +1587,10 @@ class TestFeatureFlags(unittest.TestCase):
                 self.assertFalse(meta["default"], f"{fid} should default to False")
 
     def test_load_features_from_state(self):
-        state = {"features": {"queue": True, "learn": True}}
+        state = {"features": {"queue": True, "activity": True}}
         _cfg._load_features(state)
         self.assertTrue(_cfg.FEATURES["queue"])
-        self.assertTrue(_cfg.FEATURES["learn"])
+        self.assertTrue(_cfg.FEATURES["activity"])
         self.assertTrue(_cfg.FEATURES["ticket_lookup"])  # default
         self.assertFalse(_cfg.FEATURES["watcher"])       # default
 
@@ -1601,40 +1601,41 @@ class TestFeatureFlags(unittest.TestCase):
 
     def test_save_features_roundtrip(self):
         _cfg.FEATURES["queue"] = True
-        _cfg.FEATURES["learn"] = True
+        _cfg.FEATURES["activity"] = True
         state = {}
         _cfg._save_features(state)
         self.assertTrue(state["features"]["queue"])
-        self.assertTrue(state["features"]["learn"])
+        self.assertTrue(state["features"]["activity"])
         # Reset and reload
         _cfg.FEATURES["queue"] = False
-        _cfg.FEATURES["learn"] = False
+        _cfg.FEATURES["activity"] = False
         _cfg._load_features(state)
         self.assertTrue(_cfg.FEATURES["queue"])
-        self.assertTrue(_cfg.FEATURES["learn"])
+        self.assertTrue(_cfg.FEATURES["activity"])
 
     def test_is_feature_enabled(self):
-        _cfg.FEATURES["learn"] = True
-        self.assertTrue(_cfg._is_feature_enabled("learn"))
-        _cfg.FEATURES["learn"] = False
-        self.assertFalse(_cfg._is_feature_enabled("learn"))
+        _cfg.FEATURES["activity"] = True
+        self.assertTrue(_cfg._is_feature_enabled("activity"))
+        _cfg.FEATURES["activity"] = False
+        self.assertFalse(_cfg._is_feature_enabled("activity"))
 
     def test_is_feature_enabled_unknown(self):
         self.assertFalse(_cfg._is_feature_enabled("nonexistent_feature"))
 
     def test_enabled_menu_keys(self):
-        # ticket_lookup (no menu key) + queue (menu key "1") on by default
         keys = _cfg._enabled_menu_keys()
-        self.assertIn("1", keys)       # queue is menu key 1
-        self.assertNotIn("2", keys)    # my_tickets disabled
-        self.assertNotIn("L", keys)    # learn disabled
+        self.assertIn("1", keys)       # queue
+        self.assertIn("2", keys)       # my_tickets
+        self.assertIn("l", keys)       # activity
+        self.assertNotIn("3", keys)    # watcher disabled
+        self.assertNotIn("4", keys)    # rack_map disabled
 
     def test_enabled_menu_keys_after_enabling(self):
         _cfg.FEATURES["queue"] = True
-        _cfg.FEATURES["learn"] = True
+        _cfg.FEATURES["activity"] = True
         keys = _cfg._enabled_menu_keys()
         self.assertIn("1", keys)  # queue is now menu key 1
-        self.assertIn("L", keys)
+        self.assertIn("l", keys)  # activity menu key
 
     def test_menu_options_filtered(self):
         """Disabled features are excluded from menu options list."""
@@ -1646,13 +1647,12 @@ class TestFeatureFlags(unittest.TestCase):
         ]
         _cfg.FEATURES["queue"] = True
         _cfg.FEATURES["my_tickets"] = False
-        _cfg.FEATURES["learn"] = False
+        _cfg.FEATURES["activity"] = False
         emk = _cfg._enabled_menu_keys()
         filtered = [o for o in options if not o[0].strip() or o[0] in emk]
         keys = [o[0] for o in filtered if o[0].strip()]
         self.assertIn("1", keys)
         self.assertNotIn("2", keys)
-        self.assertNotIn("L", keys)
         # Separator preserved
         self.assertIn(("", "", ""), filtered)
 
@@ -1685,13 +1685,13 @@ class TestFeatureFlags(unittest.TestCase):
 
     def test_cli_config_enable(self):
         """cwhelper config --enable sets feature to True."""
-        _cfg.FEATURES["learn"] = False
+        _cfg.FEATURES["activity"] = False
         state = {"features": {}}
         with patch("cwhelper.state._load_user_state", return_value=state), \
              patch("cwhelper.state._save_user_state"), \
              patch("builtins.print"):
-            _cli._cli_config(["--enable", "learn"])
-        self.assertTrue(_cfg.FEATURES["learn"])
+            _cli._cli_config(["--enable", "activity"])
+        self.assertTrue(_cfg.FEATURES["activity"])
 
     def test_cli_config_disable(self):
         """cwhelper config --disable sets feature to False."""

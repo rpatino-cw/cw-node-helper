@@ -25,7 +25,6 @@ from cwhelper.services.rack import _draw_mini_dh_map
 from cwhelper.services.session_log import _log_event, _print_session_log, _copy_session_to_clipboard, _print_jira_activity
 from cwhelper.services.walkthrough import _walkthrough_mode
 from cwhelper.services.brief import run_shift_brief
-from cwhelper.services.learn import _run_learn_mode
 from cwhelper.tui.rich_console import _rich_print_menu, console
 
 
@@ -265,7 +264,6 @@ def _interactive_menu():
             ("l",  "Activity",     "log · Jira"),
             ("w",  "Walkthrough",  "rack-by-rack DH walk"),
             ("r",  "Rack report",  "tickets per rack"),
-            ("L",  "Learn",        "code quiz game"),
         ]
 
         # Filter to only enabled features (separators and settings always pass through)
@@ -761,10 +759,6 @@ def _interactive_menu():
                     print(f"\n  {DIM}Could not copy — here's the list:{RESET}")
                     print(f"\n{_pa_text}\n")
             _brief_pause(1.5)
-
-        # --- L: Learn mode (code quiz game) ------------------------------------
-        elif _raw_choice == "L" and _cfg._is_feature_enabled("learn"):
-            _run_learn_mode()
 
         # --- l: Activity — session log or Jira changelog ----------------------
         elif choice == "l" and _cfg._is_feature_enabled("activity"):
