@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, rpatino/cw-node-helper]
   pull_request:
 
 jobs:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.9', '3.11', '3.13']
+        python-version: ['3.10', '3.11', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -25,3 +25,20 @@ jobs:
 
       - name: Run tests
         run: python3 test_integrity.py
+
+      - name: Verify feature config
+        run: |
+          pip install -e .
+          python3 -c "
+          from cwhelper.config import _FEATURE_REGISTRY, FEATURES
+          assert len(_FEATURE_REGISTRY) == 17, f'Expected 17 features, got {len(_FEATURE_REGISTRY)}'
+          print(f'Feature registry: {len(_FEATURE_REGISTRY)} features OK')
+          "
+
+      - name: Verify CLI help
+        run: |
+          python3 -c "
+          import sys; sys.argv = ['cwhelper', '-h']
+          from cwhelper.cli import main
+          main()
+          " | grep -q "GETTING STARTED"
