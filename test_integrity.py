@@ -1812,8 +1812,9 @@ class TestFeatureFlags(unittest.TestCase):
                             f"{fid} missing keys: {required - meta.keys()}")
 
     def test_default_enabled_features(self):
-        """Core features enabled by default."""
-        expected_on = {"ticket_lookup", "queue", "my_tickets", "node_history", "activity"}
+        """Jira-only features enabled by default, external-dep features disabled."""
+        expected_on = {"ticket_lookup", "queue", "my_tickets", "node_history", "activity",
+                       "watcher", "rack_report", "bookmarks", "bulk_start", "weekend_assign"}
         for fid, meta in _cfg._FEATURE_REGISTRY.items():
             if fid in expected_on:
                 self.assertTrue(meta["default"], f"{fid} should default to True")
@@ -1826,7 +1827,7 @@ class TestFeatureFlags(unittest.TestCase):
         self.assertTrue(_cfg.FEATURES["queue"])
         self.assertTrue(_cfg.FEATURES["activity"])
         self.assertTrue(_cfg.FEATURES["ticket_lookup"])  # default
-        self.assertFalse(_cfg.FEATURES["watcher"])       # default
+        self.assertFalse(_cfg.FEATURES["ibtrace"])       # default (needs ib_topology)
 
     def test_load_features_empty_state(self):
         _cfg._load_features({})
@@ -1860,9 +1861,10 @@ class TestFeatureFlags(unittest.TestCase):
         keys = _cfg._enabled_menu_keys()
         self.assertIn("1", keys)       # queue
         self.assertIn("2", keys)       # my_tickets
+        self.assertIn("3", keys)       # watcher
         self.assertIn("l", keys)       # activity
-        self.assertNotIn("3", keys)    # watcher disabled
-        self.assertNotIn("4", keys)    # rack_map disabled
+        self.assertIn("5", keys)       # bookmarks
+        self.assertNotIn("4", keys)    # rack_map disabled (needs netbox)
 
     def test_enabled_menu_keys_after_enabling(self):
         _cfg.FEATURES["queue"] = True

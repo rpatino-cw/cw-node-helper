@@ -5,8 +5,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/version-6.5.0-58a6ff?style=flat-square" alt="Version">
-  <img src="https://img.shields.io/badge/features-17_toggleable-d29922?style=flat-square" alt="Features">
-  <img src="https://img.shields.io/badge/tests-176_passing-3fb950?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/features-16_toggleable-d29922?style=flat-square" alt="Features">
+  <img src="https://img.shields.io/badge/tests-228_passing-3fb950?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="License">
 </p>
 
@@ -208,7 +208,6 @@ cwhelper brief --site US-EAST-03
 | Activity log | — | `l` | Jira |
 | Walkthrough | — | `w` | Jira, NetBox |
 | Rack report | `rack-report` | `r` | Jira |
-| Code quiz | `learn` | `L` | none |
 | AI chat | — | `ai` | OpenAI |
 | Node history | `history` | — | Jira |
 | Verification | `verify` | — | Jira, NetBox |
