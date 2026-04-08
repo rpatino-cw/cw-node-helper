@@ -197,10 +197,13 @@ def _interactive_menu():
     # Kick off first stale check immediately in background
     _stale_future = _executor.submit(_fetch_stale_issues)
 
-    # Auto-start background watcher if DEFAULT_SITE is set
+    # Auto-start background watcher if DEFAULT_SITE is set and watcher is enabled
     _default_site = os.environ.get("DEFAULT_SITE", "")
     if _default_site and _cfg._is_feature_enabled("watcher") and not _is_watcher_running():
         _start_background_watcher(email, token, _default_site, project="DO", interval=60)
+    elif not _default_site and _cfg._is_feature_enabled("watcher"):
+        # No default site — watcher can't start, disable it silently
+        pass  # User needs to set DEFAULT_SITE in .env or run cwhelper setup
 
     while True:
         # Collect completed stale check result (non-blocking)
@@ -238,7 +241,7 @@ def _interactive_menu():
         # --- Watcher info ---
         watcher_str = ""
         if watcher_running:
-            site_label = _watcher_site or "all sites"
+            site_label = _watcher_site or os.environ.get("DEFAULT_SITE", "") or "all sites"
             radar_tag = " + radar" if _is_radar_running() else ""
             watcher_str = f"{_watcher_project} @ {site_label} — every {_watcher_interval}s{radar_tag}"
 
