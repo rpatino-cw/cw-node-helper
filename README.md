@@ -17,7 +17,7 @@
 ---
 
 <p align="center">
-  <img src="assets/hero.gif" alt="cwhelper demo" width="800">
+  <img src="assets/hero.svg" alt="cwhelper demo" width="800">
 </p>
 
 ## Install
@@ -152,7 +152,7 @@ Browse DO, HO, or SDA tickets filtered by site and status. Color-coded by age. S
 
 ### Doctor & Config
 
-<img src="assets/config.gif" alt="Config and Doctor" width="420">
+<img src="assets/config.svg" alt="Config and Doctor" width="420">
 
 ```bash
 $ cwhelper doctor
