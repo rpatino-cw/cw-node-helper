@@ -140,6 +140,7 @@ def _open_ticket(key: str, email: str, token: str, state: dict) -> tuple[str, di
 def _interactive_menu():
     """Main interactive loop. Keeps running until user quits."""
     global _AI_ENABLED, _NTFY_ENABLED
+    _AI_ENABLED = False  # AI off by default — user can enable with "ai on"
     email, token = _get_credentials()
     _menu_compact = False  # full menu by default; ?? toggles compact mode
 
@@ -196,6 +197,11 @@ def _interactive_menu():
     # Kick off first stale check immediately in background
     _stale_future = _executor.submit(_fetch_stale_issues)
 
+    # Auto-start background watcher if DEFAULT_SITE is set
+    _default_site = os.environ.get("DEFAULT_SITE", "")
+    if _default_site and _cfg._is_feature_enabled("watcher") and not _is_watcher_running():
+        _start_background_watcher(email, token, _default_site, project="DO", interval=60)
+
     while True:
         # Collect completed stale check result (non-blocking)
         if _stale_future and _stale_future.done():
@@ -248,22 +254,16 @@ def _interactive_menu():
             last_ticket_pair = (last_key, last_summary)
 
         # --- Build options list ---
-        opt3 = ("3", "Stop watching",  "watcher is running") if watcher_running \
-               else ("3", "Watch queue", "grab tickets live")
-
         _all_options = [
             ("1",  "Queue",        "all tickets for your site"),
             ("2",  "My tickets",   ""),
-            opt3,
-            ("4",  "Rack map",     ""),
-            ("5",  "Bookmarks",    ""),
+            ("3",  "Rack map",     ""),
+            ("4",  "Bookmarks",    ""),
             ("",   "",             ""),
             ("b",  "Shift brief",  "AI priority summary — what to work on first"),
-            ("p",  "Start all",    "bulk In Progress (my tickets)"),
-            ("P",  "Start awaiting","bulk In Progress (unassigned) → clipboard"),
+            ("p",  "Scripts",      "batch actions — start, close, assign, hold"),
             ("l",  "Activity",     "log · Jira"),
             ("w",  "Walkthrough",  "rack-by-rack DH walk"),
-            ("r",  "Rack report",  "tickets per rack"),
         ]
 
         # Filter to only enabled features (separators and settings always pass through)
@@ -464,59 +464,9 @@ def _interactive_menu():
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return
 
-        # --- 3: Watch queue (toggle background watcher) --------------------
-        elif choice == "3" and _cfg._is_feature_enabled("watcher"):
-            if _is_watcher_running():
-                _stop_background_watcher()
-                print(f"\n  {DIM}Watcher stopped.{RESET}")
-                _brief_pause()
-                continue
-
-            print(f"\n  {DIM}Project:{RESET}")
-            print(f"    {BOLD}1{RESET} DO {DIM}(default){RESET}")
-            print(f"    {BOLD}2{RESET} HO")
-            print(f"    {BOLD}3{RESET} SDA")
-            try:
-                proj_input = input(f"  Project [1-3], ENTER for DO, or b to go back: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-            if proj_input.lower() in ("b", "back"):
-                continue
-            proj = {"2": "HO", "3": "SDA"}.get(proj_input, "DO")
-
-            site = _ask_site()
-            if site is None:
-                continue
-
-            print(f"\n  {DIM}Poll interval:{RESET}")
-            print(f"    {BOLD}1{RESET} Every 30 seconds")
-            print(f"    {BOLD}2{RESET} Every 45 seconds")
-            print(f"    {BOLD}3{RESET} Every 60 seconds {DIM}(default){RESET}")
-            try:
-                int_input = input(f"  Interval [1-3], ENTER for 60s, or b to go back: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-            if int_input.lower() in ("b", "back"):
-                continue
-
-            interval_map = {"1": 30, "2": 45, "3": 60, "": 60}
-            interval = interval_map.get(int_input, 60)
-
-            started = _start_background_watcher(
-                email, token, site, project=proj, interval=interval)
-            if started:
-                site_label = site or "all sites"
-                print(f"\n  {GREEN}{BOLD}Watcher started!{RESET} {proj} @ {site_label} — every {interval}s")
-                print(f"  {DIM}New tickets will appear inline. Use option 4 to stop.{RESET}")
-                _brief_pause()
-            else:
-                print(f"\n  {DIM}Watcher is already running.{RESET}")
-                _brief_pause()
-
-        # --- 4: Rack map -------------------------------------------------------
-        elif choice == "4" and _cfg._is_feature_enabled("rack_map"):
+        # --- 3: Rack map -------------------------------------------------------
+        # --- 3: Rack map -------------------------------------------------------
+        elif choice == "3" and _cfg._is_feature_enabled("rack_map"):
             recent_racks = list(state.get("recent_racks", []))
 
             # Backfill from user's queue if fewer than 5
@@ -592,8 +542,8 @@ def _interactive_menu():
             else:
                 print(f"  {DIM}Could not parse rack location. Expected format: US-SITE01.DH1.R64.RU34{RESET}")
 
-        # --- 5: Bookmark manager ----------------------------------------------
-        elif choice == "5" and _cfg._is_feature_enabled("bookmarks"):
+        # --- 4: Bookmark manager ----------------------------------------------
+        elif choice == "4" and _cfg._is_feature_enabled("bookmarks"):
             state = _manage_bookmarks(state, email, token)
 
         # --- b: Shift brief — AI priority summary from live queue ------------
@@ -605,149 +555,131 @@ def _interactive_menu():
             except (EOFError, KeyboardInterrupt):
                 pass
 
-        # --- p: Bulk start — put all my open DO tickets In Progress -----------
-        elif choice == "p" and _cfg._is_feature_enabled("bulk_start"):
-            print(f"\n  {DIM}Finding your open DO tickets...{RESET}", end="", flush=True)
+        # --- p: Scripts — batch actions on multiple tickets --------------------
+        elif choice == "p" and _cfg._is_feature_enabled("scripts"):
+            print(f"\n  {BOLD}Scripts — Batch Actions{RESET}\n")
+            print(f"    {BOLD}1{RESET} Start all my tickets       {DIM}→ In Progress{RESET}")
+            print(f"    {BOLD}2{RESET} Start unassigned tickets   {DIM}→ In Progress{RESET}")
+            print(f"    {BOLD}3{RESET} Close all verification     {DIM}→ Closed{RESET}")
+            print(f"    {BOLD}4{RESET} Hold all my In Progress    {DIM}→ On Hold{RESET}")
+            print(f"    {BOLD}5{RESET} Rack report                {DIM}→ tickets per rack{RESET}")
             try:
-                _pr = _jira_post("/rest/api/3/search/jql", email, token, body={
-                    "jql": (
-                        'project = "DO" AND assignee = currentUser() '
-                        'AND statusCategory != Done '
-                        'AND status not in ("In Progress", "Verification")'
-                        ' ORDER BY created DESC'
-                    ),
-                    "maxResults": 30,
-                    "fields": ["key", "summary", "status"],
-                })
-                _p_issues = _pr.json().get("issues", []) if _pr and _pr.ok else []
-            except Exception:
-                _p_issues = []
-            print(f"\r{'':60}\r", end="")
-
-            if not _p_issues:
-                print(f"\n  {GREEN}No startable tickets found — you're all set!{RESET}")
-                _brief_pause(1.5)
-                continue
-
-            print(f"\n  {BOLD}Tickets to start ({len(_p_issues)}):{RESET}")
-            for _pi in _p_issues:
-                _pf = _pi.get("fields", {})
-                _ps = _pf.get("status", {}).get("name", "?")
-                _psummary = _pf.get("summary", "")[:55]
-                print(f"    {CYAN}{_pi['key']}{RESET}  {DIM}{_ps:<20}{RESET}  {_psummary}")
-
-            try:
-                _pconf = input(f"\n  Start all {len(_p_issues)} ticket{'s' if len(_p_issues) != 1 else ''}? [{GREEN}y{RESET}/N]: ").strip().lower()
+                _script = input(f"\n  Pick [1-5] or b to go back: ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 print()
                 continue
-
-            if _pconf != "y":
-                print(f"  {DIM}Cancelled.{RESET}")
-                _brief_pause()
+            if _script in ("b", "back", ""):
                 continue
 
-            _p_ok = 0
-            _p_fail = 0
-            for _pi in _p_issues:
-                _pctx = {"issue_key": _pi["key"], "_transitions": None}
-                print(f"  {DIM}Starting {_pi['key']}...{RESET}", end="", flush=True)
-                if _execute_transition(_pctx, "start", email, token):
-                    print(f"\r  {GREEN}{BOLD}✓{RESET} {_pi['key']} → In Progress          ")
-                    _p_ok += 1
-                else:
-                    print(f"\r  {YELLOW}✗{RESET} {_pi['key']} — could not start        ")
-                    _p_fail += 1
+            # Determine JQL and transition based on choice
+            _sc_jql = None
+            _sc_action = None
+            _sc_label = ""
 
-            if _p_ok:
-                _log_event("bulk_start", "", "", f"{_p_ok} tickets started")
-            print(f"\n  {GREEN}{BOLD}{_p_ok} started{RESET}", end="")
-            if _p_fail:
-                print(f"  {YELLOW}{_p_fail} failed{RESET}", end="")
-            print()
-            _brief_pause(1.5)
-
-        # --- P: Bulk start awaiting (unassigned) → clipboard -------------------
-        elif _raw_choice == "P" and _cfg._is_feature_enabled("bulk_start"):
-            _pa_site = state.get("site_filter", os.environ.get("DEFAULT_SITE", ""))
-            _pa_site_jql = f' AND cf[10194] = "{_pa_site}"' if _pa_site else ""
-            print(f"\n  {DIM}Finding unassigned awaiting DO tickets{' at ' + _pa_site if _pa_site else ''}...{RESET}", end="", flush=True)
-            try:
-                _pa_resp = _jira_post("/rest/api/3/search/jql", email, token, body={
-                    "jql": (
-                        'project = "DO" AND assignee is EMPTY '
-                        'AND statusCategory != Done '
-                        'AND status not in ("In Progress", "Verification", "Closed")'
-                        f'{_pa_site_jql}'
-                        ' ORDER BY created DESC'
-                    ),
-                    "maxResults": 50,
-                    "fields": ["key", "summary", "status"],
-                })
-                _pa_issues = _pa_resp.json().get("issues", []) if _pa_resp and _pa_resp.ok else []
-            except Exception:
-                _pa_issues = []
-            print(f"\r{'':70}\r", end="")
-
-            if not _pa_issues:
-                print(f"\n  {GREEN}No unassigned awaiting tickets found.{RESET}")
-                _brief_pause(1.5)
-                continue
-
-            print(f"\n  {BOLD}Unassigned awaiting tickets ({len(_pa_issues)}):{RESET}")
-            for _pai in _pa_issues:
-                _paf = _pai.get("fields", {})
-                _pas = _paf.get("status", {}).get("name", "?")
-                _pasum = _paf.get("summary", "")[:55]
-                print(f"    {CYAN}{_pai['key']}{RESET}  {DIM}{_pas:<20}{RESET}  {_pasum}")
-
-            try:
-                _pa_conf = input(f"\n  Start all {len(_pa_issues)} without assigning? [{GREEN}y{RESET}/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-
-            if _pa_conf != "y":
-                print(f"  {DIM}Cancelled.{RESET}")
-                _brief_pause()
-                continue
-
-            _pa_ok = 0
-            _pa_fail = 0
-            _pa_started = []
-            for _pai in _pa_issues:
-                _pactx = {"issue_key": _pai["key"], "_transitions": None}
-                print(f"  {DIM}Starting {_pai['key']}...{RESET}", end="", flush=True)
-                if _execute_transition(_pactx, "start", email, token):
-                    print(f"\r  {GREEN}{BOLD}✓{RESET} {_pai['key']} → In Progress          ")
-                    _pa_ok += 1
-                    _pa_started.append((_pai["key"], _pai.get("fields", {}).get("summary", "")))
-                else:
-                    print(f"\r  {YELLOW}✗{RESET} {_pai['key']} — could not start        ")
-                    _pa_fail += 1
-
-            if _pa_ok:
-                _log_event("bulk_start_awaiting", "", "", f"{_pa_ok} unassigned tickets started")
-
-            print(f"\n  {GREEN}{BOLD}{_pa_ok} started{RESET}", end="")
-            if _pa_fail:
-                print(f"  {YELLOW}{_pa_fail} failed{RESET}", end="")
-            print()
-
-            # Build compact Slack list and copy to clipboard
-            if _pa_started:
-                _pa_lines = [f"Started {len(_pa_started)} awaiting DO tickets → In Progress:"]
-                for _pak, _pasum in _pa_started:
-                    _pa_lines.append(f"• {_pak} — {_pasum[:60]}")
-                _pa_text = "\n".join(_pa_lines)
+            if _script == "1":
+                _sc_jql = (
+                    'assignee = currentUser() '
+                    'AND statusCategory != Done '
+                    'AND status not in ("In Progress", "Verification")'
+                )
+                _sc_action = "start"
+                _sc_label = "Start"
+            elif _script == "2":
+                _sc_site = os.environ.get("DEFAULT_SITE", "")
+                _sc_site_jql = f' AND cf[10194] = "{_sc_site}"' if _sc_site else ""
+                _sc_jql = (
+                    'assignee is EMPTY '
+                    'AND statusCategory != Done '
+                    'AND status not in ("In Progress", "Verification", "Closed")'
+                    f'{_sc_site_jql}'
+                )
+                _sc_action = "start"
+                _sc_label = "Start"
+            elif _script == "3":
+                _sc_jql = (
+                    'assignee = currentUser() '
+                    'AND status = "Verification"'
+                )
+                _sc_action = "close"
+                _sc_label = "Close"
+            elif _script == "4":
+                _sc_jql = (
+                    'assignee = currentUser() '
+                    'AND status = "In Progress"'
+                )
+                _sc_action = "hold"
+                _sc_label = "Hold"
+            elif _script == "5":
+                _sc_site = os.environ.get("DEFAULT_SITE", "")
+                if not _sc_site:
+                    _sc_site = _ask_site()
+                    if _sc_site is None:
+                        continue
+                from cwhelper.services.rack_report import _run_rack_report
+                _run_rack_report(email, token, _sc_site,
+                                 status_filter="open", project="DO", limit=200)
                 try:
-                    import subprocess
-                    subprocess.run(["pbcopy"], input=_pa_text.encode(), check=True)
-                    print(f"\n  {GREEN}Copied to clipboard — paste in Slack.{RESET}")
+                    input(f"\n  {DIM}Press ENTER to return to menu...{RESET}")
+                except (EOFError, KeyboardInterrupt):
+                    pass
+                continue
+
+            if _sc_jql and _sc_action:
+                _sc_jql += ' ORDER BY created DESC'
+                print(f"\n  {DIM}Searching...{RESET}", end="", flush=True)
+                try:
+                    _sc_resp = _jira_post("/rest/api/3/search/jql", email, token, body={
+                        "jql": _sc_jql,
+                        "maxResults": 50,
+                        "fields": ["key", "summary", "status"],
+                    })
+                    _sc_issues = _sc_resp.json().get("issues", []) if _sc_resp and _sc_resp.ok else []
                 except Exception:
-                    print(f"\n  {DIM}Could not copy — here's the list:{RESET}")
-                    print(f"\n{_pa_text}\n")
-            _brief_pause(1.5)
+                    _sc_issues = []
+                print(f"\r{'':60}\r", end="")
+
+                if not _sc_issues:
+                    print(f"\n  {GREEN}No matching tickets found.{RESET}")
+                    _brief_pause(1.5)
+                    continue
+
+                print(f"\n  {BOLD}{len(_sc_issues)} ticket{'s' if len(_sc_issues) != 1 else ''} to {_sc_label.lower()}:{RESET}")
+                for _sci in _sc_issues:
+                    _scf = _sci.get("fields", {})
+                    _scs = _scf.get("status", {}).get("name", "?")
+                    _scsum = _scf.get("summary", "")[:55]
+                    print(f"    {CYAN}{_sci['key']}{RESET}  {DIM}{_scs:<20}{RESET}  {_scsum}")
+
+                try:
+                    _sc_conf = input(f"\n  {_sc_label} all {len(_sc_issues)}? [{GREEN}y{RESET}/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    continue
+
+                if _sc_conf != "y":
+                    print(f"  {DIM}Cancelled.{RESET}")
+                    _brief_pause()
+                    continue
+
+                _sc_ok = 0
+                _sc_fail = 0
+                for _sci in _sc_issues:
+                    _scctx = {"issue_key": _sci["key"], "_transitions": None}
+                    print(f"  {DIM}{_sc_label}ing {_sci['key']}...{RESET}", end="", flush=True)
+                    if _execute_transition(_scctx, _sc_action, email, token):
+                        print(f"\r  {GREEN}{BOLD}✓{RESET} {_sci['key']}                         ")
+                        _sc_ok += 1
+                    else:
+                        print(f"\r  {YELLOW}✗{RESET} {_sci['key']} — failed                ")
+                        _sc_fail += 1
+
+                if _sc_ok:
+                    _log_event(f"script_{_sc_action}", "", "", f"{_sc_ok} tickets")
+                print(f"\n  {GREEN}{BOLD}{_sc_ok} done{RESET}", end="")
+                if _sc_fail:
+                    print(f"  {YELLOW}{_sc_fail} failed{RESET}", end="")
+                print()
+                _brief_pause(1.5)
 
         # --- l: Activity — session log or Jira changelog ----------------------
         elif choice == "l" and _cfg._is_feature_enabled("activity"):
@@ -791,20 +723,6 @@ def _interactive_menu():
                 _clear_screen()
 
         # --- r: Rack report (tickets per rack breakdown) ----------------------
-        elif choice == "r" and _cfg._is_feature_enabled("rack_report"):
-            filters = _ask_queue_filters()
-            if filters:
-                from cwhelper.services.rack_report import _run_rack_report
-                _run_rack_report(email, token, filters["site"],
-                                 status_filter=filters["status_filter"],
-                                 project="DO",
-                                 limit=200)
-                try:
-                    input(f"\n  {DIM}Press ENTER to return to menu...{RESET}")
-                except (EOFError, KeyboardInterrupt):
-                    pass
-                _clear_screen()
-
         # --- w: Walkthrough mode (rack-by-rack DH walk with annotations) ------
         elif choice == "w" and _cfg._is_feature_enabled("walkthrough"):
             state = _walkthrough_mode(state, email, token)

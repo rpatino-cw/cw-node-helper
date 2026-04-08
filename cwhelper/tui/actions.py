@@ -213,7 +213,7 @@ def _print_action_panel(ctx: dict, state: dict = None):
         if status_lower == "in progress" and mine:
             status_items.append(btn("v", "Verification", BLUE))
             status_items.append(btn("y", "On Hold", YELLOW))
-            if ctx.get("rack_location") and _cfg._is_feature_enabled("bulk_start"):
+            if ctx.get("rack_location") and _cfg._is_feature_enabled("scripts"):
                 status_items.append(btn("hc", "Hold cab", YELLOW))
         if status_lower in ("on hold", "blocked", "paused",
                             "waiting for support", "awaiting support") and mine:
@@ -224,8 +224,8 @@ def _print_action_panel(ctx: dict, state: dict = None):
         if status_lower in ("closed", "done", "resolved") and mine:
             status_items.append(btn("vv", "Back to Verification", BLUE))
 
-        # Cab-level bulk actions — gated by bulk_start feature flag
-        if ctx.get("rack_location") and _cfg._is_feature_enabled("bulk_start"):
+        # Cab-level bulk actions — gated by scripts feature flag
+        if ctx.get("rack_location") and _cfg._is_feature_enabled("scripts"):
             status_items.append(btn("hg", "Give cab", CYAN))
             status_items.append(btn("lg", "Link cab", MAGENTA))
             status_items.append(btn("ws", "Grab waiting cab", GREEN))

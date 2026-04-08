@@ -244,8 +244,8 @@ class TestActionPanelButtons(unittest.TestCase):
         out = _capture_panel(_base_ticket_ctx(service_tag="10NQ724"))
         self._has(out, "vr")
 
-    def test_cab_ops_hidden_when_bulk_start_disabled(self):
-        _cfg.FEATURES["bulk_start"] = False
+    def test_cab_ops_hidden_when_scripts_disabled(self):
+        _cfg.FEATURES["scripts"] = False
         ctx = _base_ticket_ctx(
             status="In Progress", assignee="Me", _assignee_account_id="aid1",
             rack_location="US-SITE01.DH1.R64.RU34",
@@ -253,8 +253,8 @@ class TestActionPanelButtons(unittest.TestCase):
         out = _capture_panel(ctx, display_name="Me", account_id="aid1")
         self._lacks(out, "hc", "hg", "lg", "ws")
 
-    def test_cab_ops_shown_when_bulk_start_enabled(self):
-        _cfg.FEATURES["bulk_start"] = True
+    def test_cab_ops_shown_when_scripts_enabled(self):
+        _cfg.FEATURES["scripts"] = True
         ctx = _base_ticket_ctx(
             status="In Progress", assignee="Me", _assignee_account_id="aid1",
             rack_location="US-SITE01.DH1.R64.RU34",
@@ -1800,7 +1800,7 @@ class TestFeatureFlags(unittest.TestCase):
             "ticket_lookup", "queue", "my_tickets", "node_history",
             "shift_brief", "verify", "watcher", "rack_report",
             "ibtrace", "rack_map", "bookmarks",
-            "bulk_start", "activity", "walkthrough", "weekend_assign",
+            "scripts", "activity", "walkthrough", "weekend_assign",
             "ai_chat",
         }
         self.assertEqual(set(_cfg._FEATURE_REGISTRY.keys()), expected)
@@ -1814,7 +1814,7 @@ class TestFeatureFlags(unittest.TestCase):
     def test_default_enabled_features(self):
         """Jira-only features enabled by default, external-dep features disabled."""
         expected_on = {"ticket_lookup", "queue", "my_tickets", "node_history", "activity",
-                       "watcher", "rack_report", "bookmarks", "bulk_start", "weekend_assign"}
+                       "watcher", "rack_report", "scripts", "weekend_assign"}
         for fid, meta in _cfg._FEATURE_REGISTRY.items():
             if fid in expected_on:
                 self.assertTrue(meta["default"], f"{fid} should default to True")
@@ -1861,10 +1861,9 @@ class TestFeatureFlags(unittest.TestCase):
         keys = _cfg._enabled_menu_keys()
         self.assertIn("1", keys)       # queue
         self.assertIn("2", keys)       # my_tickets
-        self.assertIn("3", keys)       # watcher
         self.assertIn("l", keys)       # activity
-        self.assertIn("5", keys)       # bookmarks
-        self.assertNotIn("4", keys)    # rack_map disabled (needs netbox)
+        self.assertNotIn("3", keys)    # rack_map disabled (needs netbox)
+        self.assertNotIn("4", keys)    # bookmarks disabled by default
 
     def test_enabled_menu_keys_after_enabling(self):
         _cfg.FEATURES["queue"] = True
