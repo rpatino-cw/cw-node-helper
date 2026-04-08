@@ -472,10 +472,6 @@ def _rich_print_menu(
         console.print(t)
         console.print()
 
-    # Watcher status — plain text
-    if watcher_info:
-        console.print(f"{INDENT}[bold green]◉  watching[/]  [dim]{watcher_info}[/]")
-        console.print()
 
     # Last viewed shortcut — plain text
     if last_ticket:

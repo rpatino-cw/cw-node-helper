@@ -238,13 +238,6 @@ def _interactive_menu():
         if _stale_future is None:
             _stale_future = _executor.submit(_fetch_stale_issues)
 
-        # --- Watcher info ---
-        watcher_str = ""
-        if watcher_running:
-            site_label = _watcher_site or os.environ.get("DEFAULT_SITE", "") or "all sites"
-            radar_tag = " + radar" if _is_radar_running() else ""
-            watcher_str = f"{_watcher_project} @ {site_label} — every {_watcher_interval}s{radar_tag}"
-
         # --- Last ticket shortcut ---
         last_ticket_pair = None
         last_key = state.get("last_ticket")
@@ -288,7 +281,7 @@ def _interactive_menu():
             shortcuts=shortcuts if shortcuts else None,
             stale_count=_stale_count,
             last_ticket=last_ticket_pair,
-            watcher_info=watcher_str,
+            watcher_info="",
             ai_enabled=_AI_ENABLED,
             ai_available=ai_available,
             compact=_menu_compact,
@@ -329,8 +322,7 @@ def _interactive_menu():
                     f"  Press ENTER to view{RESET}"
                     f"\n  {YELLOW}{BOLD}{'━' * 50}{RESET}\n"
                 )
-            else:
-                watcher_hint = f"\n  {DIM}Watching... press ENTER to refresh{RESET}"
+            # No idle message — watcher runs silently in background
         try:
             _raw_choice = input(f"  Enter ticket/tag/hostname, menu option, or q: {watcher_hint}").strip()
             choice = _raw_choice.lower()
