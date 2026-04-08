@@ -544,9 +544,9 @@ def _cli_setup():
         ("NETBOX_API_TOKEN", "NetBox API token",  "",
          "NetBox API token (optional)"),
         ("KNOWN_SITES",      "Known sites",       "",
-         "Comma-separated site codes, e.g. US-EAST-03,US-WEST-01 (optional)"),
+         "Auto-detected from Jira. Just press ENTER to keep."),
         ("DEFAULT_SITE",     "Your site",         "",
-         "Your primary site code, e.g. US-EAST-03 (used for queue + watcher)"),
+         "The site YOU work at. e.g. US-EAST-03. Queue + watcher use this."),
     ]
 
     values = {}
