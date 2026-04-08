@@ -586,7 +586,11 @@ def _interactive_menu():
                 _sc_label = "Start"
             elif _script == "2":
                 _sc_site = os.environ.get("DEFAULT_SITE", "")
-                _sc_site_jql = f' AND cf[10194] = "{_sc_site}"' if _sc_site else ""
+                if not _sc_site:
+                    _sc_site = _ask_site()
+                    if _sc_site is None:
+                        continue
+                _sc_site_jql = f' AND cf[10194] = "{_sc_site}"'
                 _sc_jql = (
                     'assignee is EMPTY '
                     'AND statusCategory != Done '
@@ -643,27 +647,61 @@ def _interactive_menu():
                     _brief_pause(1.5)
                     continue
 
-                print(f"\n  {BOLD}{len(_sc_issues)} ticket{'s' if len(_sc_issues) != 1 else ''} to {_sc_label.lower()}:{RESET}")
-                for _sci in _sc_issues:
+                # Show numbered list — user picks which ones
+                print(f"\n  {BOLD}{len(_sc_issues)} ticket{'s' if len(_sc_issues) != 1 else ''} found:{RESET}")
+                for _idx, _sci in enumerate(_sc_issues, 1):
                     _scf = _sci.get("fields", {})
                     _scs = _scf.get("status", {}).get("name", "?")
-                    _scsum = _scf.get("summary", "")[:55]
-                    print(f"    {CYAN}{_sci['key']}{RESET}  {DIM}{_scs:<20}{RESET}  {_scsum}")
+                    _scsum = _scf.get("summary", "")[:50]
+                    print(f"    {BOLD}{_idx:>2}{RESET}. {CYAN}{_sci['key']}{RESET}  {DIM}{_scs:<16}{RESET}  {_scsum}")
 
+                print(f"\n  {DIM}Pick tickets to {_sc_label.lower()}:{RESET}")
+                print(f"    {BOLD}a{RESET} = all    {BOLD}1,3,5{RESET} = specific    {BOLD}1-5{RESET} = range    {BOLD}b{RESET} = cancel")
                 try:
-                    _sc_conf = input(f"\n  {_sc_label} all {len(_sc_issues)}? [{GREEN}y{RESET}/N]: ").strip().lower()
+                    _pick = input(f"  > ").strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     print()
                     continue
 
-                if _sc_conf != "y":
-                    print(f"  {DIM}Cancelled.{RESET}")
+                if _pick in ("b", "back", ""):
+                    continue
+
+                # Parse selection
+                _selected_idxs: set[int] = set()
+                if _pick == "a":
+                    _selected_idxs = set(range(len(_sc_issues)))
+                else:
+                    for _part in _pick.replace(" ", ",").split(","):
+                        _part = _part.strip()
+                        if not _part:
+                            continue
+                        if "-" in _part:
+                            try:
+                                _lo, _hi = _part.split("-", 1)
+                                for _i in range(int(_lo) - 1, int(_hi)):
+                                    if 0 <= _i < len(_sc_issues):
+                                        _selected_idxs.add(_i)
+                            except ValueError:
+                                pass
+                        else:
+                            try:
+                                _i = int(_part) - 1
+                                if 0 <= _i < len(_sc_issues):
+                                    _selected_idxs.add(_i)
+                            except ValueError:
+                                pass
+
+                if not _selected_idxs:
+                    print(f"  {DIM}No tickets selected.{RESET}")
                     _brief_pause()
                     continue
 
+                _selected = [_sc_issues[i] for i in sorted(_selected_idxs)]
+                print(f"\n  {_sc_label}ing {len(_selected)} ticket{'s' if len(_selected) != 1 else ''}...")
+
                 _sc_ok = 0
                 _sc_fail = 0
-                for _sci in _sc_issues:
+                for _sci in _selected:
                     _scctx = {"issue_key": _sci["key"], "_transitions": None}
                     print(f"  {DIM}{_sc_label}ing {_sci['key']}...{RESET}", end="", flush=True)
                     if _execute_transition(_scctx, _sc_action, email, token):
