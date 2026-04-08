@@ -400,7 +400,7 @@ def _cli_doctor():
     if has_nb:
         try:
             resp = _cfg._session.get(
-                f"{nb_url.rstrip('/')}/api/status/",
+                f"{nb_url.rstrip('/').rstrip('/api')}/api/status/",
                 headers={"Authorization": f"Token {nb_token}", "Accept": "application/json"},
                 timeout=(3, 5),
             )
@@ -657,7 +657,7 @@ def _cli_setup():
         os.environ["NETBOX_API_TOKEN"] = nb_token
         try:
             resp = _cfg._session.get(
-                f"{nb_url.rstrip('/')}/api/status/",
+                f"{nb_url.rstrip('/').rstrip('/api')}/api/status/",
                 headers={"Authorization": f"Token {nb_token}", "Accept": "application/json"},
                 timeout=(3, 5),
             )
