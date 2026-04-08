@@ -246,7 +246,9 @@ def _search_site_queue(site: str, email: str, token: str,
         return f'{where} ORDER BY created DESC' if where else 'ORDER BY created DESC'
 
     if not _site_escaped:
-        jql = _build_jql('statusCategory != Done', sc.replace('AND ', ''), mine_clause)
+        # When status_filter="all", don't add statusCategory filter
+        base = 'statusCategory != Done' if status_filter.lower() != 'all' else ''
+        jql = _build_jql(base, sc.replace('AND ', ''), mine_clause)
         return _jql_search(jql, email, token, max_results=limit,
                           fields=_fields, use_cache=use_cache)
 
