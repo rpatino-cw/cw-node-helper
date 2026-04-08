@@ -41,24 +41,66 @@ def _render_settings_table() -> None:
     console.print()
 
 
+def _render_watcher_status() -> None:
+    """Show live watcher status below the feature table."""
+    import os
+    from cwhelper.services.watcher import _is_watcher_running
+    from cwhelper import config as _c
+
+    running = _is_watcher_running()
+    site = _c._watcher_site or os.environ.get("DEFAULT_SITE", "")
+
+    if running:
+        console.print(f"  [bold green]● Watcher running[/]  [dim]{site or 'all sites'} — every {_c._watcher_interval}s[/]")
+        console.print(f"  [dim]  [bold]w[/bold] = stop watcher[/]")
+    else:
+        console.print(f"  [bold red]○ Watcher stopped[/]")
+        if site:
+            console.print(f"  [dim]  [bold]w[/bold] = start watcher for {site}[/]")
+        else:
+            console.print(f"  [dim]  Set DEFAULT_SITE in .env to enable watcher[/]")
+    console.print()
+
+
 def _settings_page(state: dict) -> dict:
     """Interactive settings loop. Returns updated state dict."""
     _ids = sorted(_cfg._FEATURE_REGISTRY.keys())
 
     while True:
         _render_settings_table()
+        _render_watcher_status()
         console.print(f"  [dim]Toggle by number, [bold]a[/bold] = all on, "
-                      f"[bold]n[/bold] = all off, [bold]b[/bold] = back[/dim]")
+                      f"[bold]n[/bold] = all off, [bold]w[/bold] = watcher, [bold]b[/bold] = back[/dim]")
         console.print()
 
         try:
-            raw = input(f"  Toggle [1-{len(_ids)}] or b: ").strip().lower()
+            raw = input(f"  Toggle [1-{len(_ids)}], w, or b: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             break
 
         if raw in ("b", "back", "q", ""):
             break
+
+        if raw == "w":
+            import os
+            from cwhelper.services.watcher import _is_watcher_running, _start_background_watcher, _stop_background_watcher
+            from cwhelper.clients.jira import _get_credentials
+            if _is_watcher_running():
+                _stop_background_watcher()
+                print(f"  Watcher stopped.")
+            else:
+                site = os.environ.get("DEFAULT_SITE", "")
+                if site:
+                    try:
+                        email, token = _get_credentials()
+                        _start_background_watcher(email, token, site, project="DO", interval=60)
+                        print(f"  Watcher started for {site}.")
+                    except Exception:
+                        print(f"  Could not start watcher — check credentials.")
+                else:
+                    print(f"  Set DEFAULT_SITE in .env first (run: cwhelper setup)")
+            continue
 
         if raw == "a":
             for fid in _ids:
