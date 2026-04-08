@@ -497,10 +497,10 @@ def _rich_print_menu(
 
     console.print()
 
-    # Lettered utility options (p, l, mj, v)
+    # Lettered utility options (excluding settings — rendered below nav)
     lettered = [
         (k, _COMPACT_LABELS.get(k, l.split()[0].lower()))
-        for k, l, _ in options if k.strip() and not k.isdigit()
+        for k, l, _ in options if k.strip() and not k.isdigit() and k != "s"
     ]
     if lettered:
         console.print(_row(lettered))
@@ -522,14 +522,16 @@ def _rich_print_menu(
         nav.append(f"  {'on' if ai_enabled else 'off'}", style="dim")
     console.print(nav)
 
-    # Feature count hint — show when not all features are enabled
+    # Feature count + settings — always at the bottom
     from cwhelper.config import FEATURES as _FEATURES
     _n_on = sum(1 for v in _FEATURES.values() if v)
     _n_total = len(_FEATURES)
+    s_line = Text(INDENT)
+    s_line.append("s", style="bold")
+    s_line.append("  settings", style="dim")
     if _n_on < _n_total:
-        feat = Text(INDENT)
-        feat.append(f"{_n_on}/{_n_total} features enabled", style="dim italic")
-        console.print(feat)
+        s_line.append(f"   {_n_on}/{_n_total} enabled", style="dim italic")
+    console.print(s_line)
 
     # Bookmarks
     if shortcuts:
