@@ -7,7 +7,7 @@ import time
 from cwhelper import config as _cfg
 from cwhelper.config import *  # noqa: F401,F403
 from cwhelper.cache import _cache_put, _escape_jql
-__all__ = ['_jql_search', '_fetch_sla', '_search_by_text', '_search_queue']
+__all__ = ['_jql_search', '_fetch_sla', '_search_by_text', '_search_queue', '_search_site_queue']
 from cwhelper.clients.jira import _jira_get, _jira_post, _handle_response_errors
 
 
@@ -144,7 +144,6 @@ def _search_queue(site: str, email: str, token: str,
       "all"          — no status filter (everything)
       or any raw status name like "Reopened"
     """
-    # Apply status filter
     sf = QUEUE_FILTERS.get(status_filter.lower())
     _site_escaped = _escape_jql(site) if site else ""
 
@@ -166,7 +165,7 @@ def _search_queue(site: str, email: str, token: str,
         return q
 
     _fields = [
-        "summary", "status", "issuetype",
+        "summary", "status", "issuetype", "project",
         "customfield_10193",   # service_tag
         "customfield_10207",   # rack_location
         "customfield_10192",   # hostname
@@ -196,8 +195,7 @@ def _search_queue(site: str, email: str, token: str,
             fields=_fields, use_cache=use_cache,
         )
 
-    # 3. Fall back to rack_location prefix (cf[10207]) — catches LoCode mismatches
-    #    e.g. site="US-RIN01" matches rack_location "US-RIN01.DH1.R35.RU28"
+    # 3. Fall back to rack_location prefix (cf[10207])
     if not results:
         results = _jql_search(
             _build_jql(f'AND cf[10207] ~ "{_site_escaped}" '),
@@ -206,5 +204,58 @@ def _search_queue(site: str, email: str, token: str,
         )
 
     return results
+
+
+def _search_site_queue(site: str, email: str, token: str,
+                       mine_only: bool = False, limit: int = 50,
+                       status_filter: str = "open",
+                       use_cache: bool = True) -> list:
+    """Search ALL tickets for a site — no project filter.
+
+    Queries Jira for any ticket matching the site field, regardless of
+    project. This lets DCTs see DO, HO, SDA, and any other project
+    tickets for their site in one combined list.
+    """
+    sf = QUEUE_FILTERS.get(status_filter.lower())
+    _site_escaped = _escape_jql(site) if site else ""
+
+    def _status_clause() -> str:
+        if sf is None and status_filter.lower() != "all":
+            return f'AND status = "{_escape_jql(status_filter)}" '
+        elif sf:
+            return f'AND {sf} '
+        return ""
+
+    _fields = [
+        "summary", "status", "issuetype", "project",
+        "customfield_10193",   # service_tag
+        "customfield_10207",   # rack_location
+        "customfield_10192",   # hostname
+        "customfield_10194",   # site
+        "assignee", "created", "updated", "statuscategorychangedate",
+        "description",
+    ]
+
+    mine_clause = 'AND assignee = currentUser() ' if mine_only else ''
+
+    if not _site_escaped:
+        # No site filter — all accessible tickets
+        jql = f'statusCategory != Done {_status_clause()}{mine_clause}ORDER BY created DESC'
+        return _jql_search(jql, email, token, max_results=limit,
+                          fields=_fields, use_cache=use_cache)
+
+    # Site filter — try exact, then contains, then rack_location
+    for site_clause in [
+        f'cf[10194] = "{_site_escaped}"',
+        f'cf[10194] ~ "{_site_escaped}"',
+        f'cf[10207] ~ "{_site_escaped}"',
+    ]:
+        jql = f'{site_clause} {_status_clause()}{mine_clause}ORDER BY created DESC'
+        results = _jql_search(jql, email, token, max_results=limit,
+                             fields=_fields, use_cache=use_cache)
+        if results:
+            return results
+
+    return []
 
 

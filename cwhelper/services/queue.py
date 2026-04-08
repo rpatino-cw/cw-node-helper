@@ -15,7 +15,7 @@ from cwhelper.clients.jira import _get_credentials, _jira_get_issue, _refresh_ct
 from cwhelper.state import _load_user_state, _save_user_state, _record_ticket_view, _record_queue_view, _add_bookmark, _remove_bookmark
 from cwhelper.cache import _brief_pause, _escape_jql
 from cwhelper.services.context import _build_context, _format_age, _parse_jira_timestamp, _short_device_name, _unwrap_field
-from cwhelper.services.search import _jql_search, _search_queue, _search_by_text
+from cwhelper.services.search import _jql_search, _search_queue, _search_site_queue, _search_by_text
 from cwhelper.services.ai import _ai_dispatch
 from cwhelper.tui.display import _clear_screen, _print_pretty, _prompt_select, _status_color
 from cwhelper.tui.rich_console import _rich_print_queue_table, _rich_queue_prompt, console
@@ -361,9 +361,10 @@ def _run_queue_interactive(email: str, token: str, site: str,
         _active_str = f"  [{', '.join(_active)}]" if _active else ""
 
         console.print(f"  [dim]Searching...[/]", end="\r")
-        issues = _search_queue(site, email, token, mine_only=mine_only, limit=limit,
-                               status_filter=status_filter, project=project,
-                               use_cache=_q_first)
+        # Use site-wide search (no project filter) when called without specific project
+        issues = _search_site_queue(site, email, token, mine_only=mine_only, limit=limit,
+                                    status_filter=status_filter,
+                                    use_cache=_q_first)
         _q_first = False
 
         # Apply column filters then sort

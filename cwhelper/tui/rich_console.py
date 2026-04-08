@@ -430,7 +430,7 @@ def _rich_queue_prompt(n_issues: int, extra_hints: list[str] = None) -> str:
 # ---------------------------------------------------------------------------
 
 _COMPACT_LABELS: dict[str, str] = {
-    "1": "queue",   "2": "mine",    "3": "watch",    "4": "map",
+    "1": "queue",   "2": "mine",    "3": "watch",   "4": "map",
     "5": "bookmarks",
     "p": "start",   "l": "activity", "w": "walk",
 }

@@ -252,7 +252,7 @@ def _interactive_menu():
                else ("3", "Watch queue", "grab tickets live")
 
         _all_options = [
-            ("1",  "Browse queue", "DO · HO · SDA"),
+            ("1",  "Queue",        "all tickets for your site"),
             ("2",  "My tickets",   ""),
             opt3,
             ("4",  "Rack map",     ""),
@@ -423,28 +423,12 @@ def _interactive_menu():
             state = _settings_page(state)
             continue
 
-        # --- 1: Browse queue (DO, HO, or SDA) --------------------------------
+        # --- 1: Browse queue — all tickets for your site ----------------------
         elif choice == "1" and _cfg._is_feature_enabled("queue"):
-            print(f"\n  {DIM}Project:{RESET}")
-            print(f"    {BOLD}1{RESET} DO  — Data Operations {DIM}(hands-on: reseat, swap, cable){RESET}")
-            print(f"    {BOLD}2{RESET} HO  — Hardware Operations {DIM}(RMA lifecycle, vendor, parts){RESET}")
-            print(f"    {BOLD}3{RESET} SDA — Service Desk Albatross {DIM}(Albatross hardware incidents){RESET}")
-            try:
-                proj_input = input(f"  Project [1-3], ENTER for DO, or b to go back: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                continue
-            if proj_input.lower() in ("b", "back"):
-                continue
-            project = {"2": "HO", "3": "SDA"}.get(proj_input, "DO")
-
-            opts = _ask_queue_filters(project=project)
-            if not opts:
-                continue
-
+            _default_site = os.environ.get("DEFAULT_SITE", "")
             action = _run_queue_interactive(
-                email, token, opts["site"],
-                status_filter=opts["status_filter"], project=project)
+                email, token, _default_site,
+                status_filter="open")
             if action == "quit":
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return
