@@ -236,11 +236,17 @@ def _search_site_queue(site: str, email: str, token: str,
         "description",
     ]
 
-    mine_clause = 'AND assignee = currentUser() ' if mine_only else ''
+    mine_clause = 'assignee = currentUser() ' if mine_only else ''
+    sc = _status_clause()
+
+    def _build_jql(*clauses: str) -> str:
+        """Combine non-empty clauses with AND."""
+        parts = [c.strip() for c in clauses if c.strip()]
+        where = " AND ".join(parts)
+        return f'{where} ORDER BY created DESC' if where else 'ORDER BY created DESC'
 
     if not _site_escaped:
-        # No site filter — all accessible tickets
-        jql = f'statusCategory != Done {_status_clause()}{mine_clause}ORDER BY created DESC'
+        jql = _build_jql('statusCategory != Done', sc.replace('AND ', ''), mine_clause)
         return _jql_search(jql, email, token, max_results=limit,
                           fields=_fields, use_cache=use_cache)
 
@@ -250,7 +256,7 @@ def _search_site_queue(site: str, email: str, token: str,
         f'cf[10194] ~ "{_site_escaped}"',
         f'cf[10207] ~ "{_site_escaped}"',
     ]:
-        jql = f'{site_clause} {_status_clause()}{mine_clause}ORDER BY created DESC'
+        jql = _build_jql(site_clause, sc.replace('AND ', ''), mine_clause)
         results = _jql_search(jql, email, token, max_results=limit,
                              fields=_fields, use_cache=use_cache)
         if results:
