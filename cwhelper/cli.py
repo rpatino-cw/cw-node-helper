@@ -37,6 +37,30 @@ def _preflight_check():
         print(f"     Starting in offline mode — some features will fail.\n")
 
 
+def _check_update_age() -> None:
+    """Nudge user to update if the install is more than 7 days old."""
+    try:
+        import subprocess
+        from datetime import datetime, timezone
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%cI"],
+            cwd=_cfg._PROJECT_ROOT,
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return
+        last_commit = result.stdout.strip()
+        if not last_commit:
+            return
+        dt = datetime.fromisoformat(last_commit)
+        age_days = (datetime.now(timezone.utc) - dt).days
+        if age_days >= 7:
+            print(f"\n  {YELLOW}This install is {age_days} days old.{RESET}")
+            print(f"  Run {BOLD}cwhelper update{RESET} to get the latest version.\n")
+    except Exception:
+        pass
+
+
 def _require_feature(feature_id: str) -> bool:
     """Check feature flag; print message and return False if disabled."""
     if not _cfg._is_feature_enabled(feature_id):
@@ -54,6 +78,9 @@ def main():
     # Load persisted feature flags before any dispatch
     _state = _load_user_state()
     _cfg._load_features(_state)
+
+    # Check how old the install is — nudge to update if stale
+    _check_update_age()
 
     # No arguments at all → launch interactive menu
     if not raw_args:
