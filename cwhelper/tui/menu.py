@@ -426,6 +426,11 @@ def _interactive_menu():
         # --- 1: Browse queue — all tickets for your site ----------------------
         elif choice == "1" and _cfg._is_feature_enabled("queue"):
             _default_site = os.environ.get("DEFAULT_SITE", "")
+            if not _default_site:
+                # No default site — ask user to pick one
+                _default_site = _ask_site()
+                if _default_site is None:
+                    continue
             action = _run_queue_interactive(
                 email, token, _default_site,
                 status_filter="open")
@@ -454,7 +459,7 @@ def _interactive_menu():
                     continue
             action = _run_queue_interactive(
                 email, token, "",
-                mine_only=True, status_filter="all", project="DO")
+                mine_only=True, status_filter="all")
             if action == "quit":
                 print(f"\n  {DIM}Goodbye.{RESET}\n")
                 return

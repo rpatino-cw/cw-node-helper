@@ -2081,7 +2081,7 @@ class TestQueueJsonOutput(unittest.TestCase):
     def setUp(self):
         _cfg.FEATURES["queue"] = True
 
-    @patch("cwhelper.services.queue._search_queue")
+    @patch("cwhelper.services.queue._search_site_queue")
     def test_json_output_structure(self, mock_sq):
         """--json outputs valid JSON array of issues."""
         mock_sq.return_value = _mock_queue_issues(3)
@@ -2096,7 +2096,7 @@ class TestQueueJsonOutput(unittest.TestCase):
         self.assertEqual(len(data), 3)
         self.assertIn("key", data[0])
 
-    @patch("cwhelper.services.queue._search_queue")
+    @patch("cwhelper.services.queue._search_site_queue")
     def test_empty_queue_json(self, mock_sq):
         """Empty queue outputs empty JSON array."""
         mock_sq.return_value = []

@@ -378,7 +378,7 @@ def _run_queue_interactive(email: str, token: str, site: str,
         if not issues:
             filter_display = status_filter.replace("_", " ").title() if status_filter != "all" else "All"
             site_display = site or "all sites"
-            console.print(f"  [yellow bold]{filter_display}[/] — [dim]no {project} tickets for {site_display}[/]")
+            console.print(f"  [yellow bold]{filter_display}[/] — [dim]no tickets for {site_display}[/]")
             if _col_filters:
                 console.print(f"\n  [dim]No results match your filters. Press r to reset.[/]")
                 try:
@@ -970,8 +970,8 @@ def _run_queue_json(email: str, token: str, site: str,
                     mine_only: bool = False, limit: int = 20,
                     status_filter: str = "open", project: str = "DO"):
     """Non-interactive queue dump as JSON."""
-    issues = _search_queue(site, email, token, mine_only=mine_only, limit=limit,
-                           status_filter=status_filter, project=project)
+    issues = _search_site_queue(site, email, token, mine_only=mine_only, limit=limit,
+                                status_filter=status_filter)
     out = []
     for iss in issues:
         f = iss.get("fields", {})
